@@ -1,0 +1,154 @@
+// Browser-side persistence for scenes — the source of truth, works offline.
+//
+// The *active* scene keeps living in Excalidraw's regular localStorage keys
+// (the app saves it as usual). We add:
+//  - a metadata record in localStorage: which scene is active, and per scene
+//    the GitHub version it is based on, dirty flag, sync settings, conflicts
+//  - snapshots of inactive scenes in IndexedDB (incl. image files, which
+//    would quickly blow the localStorage quota)
+
+import { createStore, del, delMany, entries, get, set } from "idb-keyval";
+
+export const META_KEY = "excalidraw-scenes";
+const snapshotStore = createStore("excalidraw-scenes-db", "snapshots");
+
+/** key used for the scene that has not been named / saved yet */
+export const UNTITLED = "\u0000untitled";
+
+export type SceneMeta = {
+  /** git blob sha on GitHub the local copy is based on; null = never pushed */
+  baseSha: string | null;
+  /** last seen sha on GitHub (null = not on GitHub) — for status while offline */
+  remoteSha?: string | null;
+  /** local changes not pushed yet (for the active scene this is live state) */
+  dirty: boolean;
+  /** per-scene override of the global auto-sync switch */
+  autoSync?: boolean;
+  /** both sides changed the same elements — waits for the user */
+  conflict?: { remoteSha: string; clashes: string[] };
+  /** pre-sync-engine metadata, resolved on the first remote listing */
+  legacy?: boolean;
+  /** renamed locally, the rename on GitHub is still pending (old name) */
+  renamedFrom?: string;
+  /** legacy field */
+  inRepo?: boolean;
+};
+
+export type ScenesMeta = {
+  /** active scene; null = untitled */
+  current: string | null;
+  /** hash of the active scene's base version, to detect local changes */
+  baseline: number | null;
+  /** global auto-sync switch (default on) */
+  autoSync: boolean;
+  scenes: Record<string, SceneMeta>;
+  /**
+   * deleted locally, the delete on GitHub is still pending (offline):
+   * name -> the GitHub version that was deleted (only that one gets deleted)
+   */
+  pendingDeletes: Record<string, string>;
+};
+
+export type Snapshot = {
+  /** serialized .excalidraw JSON (incl. files) */
+  json: string;
+  /** hash of the base version (to compute dirty) */
+  baseline: number | null;
+  dirty: boolean;
+};
+
+export const loadMeta = (): ScenesMeta => {
+  const fallback: ScenesMeta = {
+    current: null,
+    baseline: null,
+    autoSync: true,
+    scenes: {},
+    pendingDeletes: {},
+  };
+  try {
+    const raw = localStorage.getItem(META_KEY);
+    if (raw) {
+      const meta: ScenesMeta = { ...fallback, ...JSON.parse(raw) };
+      for (const scene of Object.values(meta.scenes)) {
+        if (scene.baseSha === undefined) {
+          scene.baseSha = null;
+          scene.legacy = true;
+        }
+      }
+      return meta;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  return fallback;
+};
+
+export const saveMeta = (meta: ScenesMeta) => {
+  try {
+    localStorage.setItem(META_KEY, JSON.stringify(meta));
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const snapshotKey = (name: string | null) => name ?? UNTITLED;
+
+export const getSnapshot = (name: string | null) =>
+  get<Snapshot>(snapshotKey(name), snapshotStore);
+
+export const setSnapshot = (name: string | null, snapshot: Snapshot) =>
+  set(snapshotKey(name), snapshot, snapshotStore);
+
+export const deleteSnapshot = (name: string | null) =>
+  del(snapshotKey(name), snapshotStore);
+
+// -----------------------------------------------------------------------------
+// agent support data — kept in the browser too, so the server side stays
+// stateless
+// -----------------------------------------------------------------------------
+
+const agentStore = createStore("excalidraw-scenes-agent", "data");
+
+/** what the canvas looked like when an agent last read / edited it */
+export type AgentBaseline = { at: string; action: string; elements: unknown[] };
+
+const baselineKey = (name: string | null) => `baseline:${name ?? UNTITLED}`;
+
+export const getAgentBaseline = (name: string | null) =>
+  get<AgentBaseline>(baselineKey(name), agentStore);
+
+export const setAgentBaseline = (name: string | null, baseline: AgentBaseline) =>
+  set(baselineKey(name), baseline, agentStore);
+
+export const deleteAgentBaseline = (name: string | null) =>
+  del(baselineKey(name), agentStore);
+
+export const moveAgentBaseline = async (from: string, to: string) => {
+  const baseline = await getAgentBaseline(from);
+  await deleteAgentBaseline(to);
+  if (baseline) {
+    await setAgentBaseline(to, baseline);
+    await deleteAgentBaseline(from);
+  }
+};
+
+/** create_view checkpoints (agent drafts); the oldest are dropped */
+const MAX_CHECKPOINTS = 200;
+const checkpointKey = (id: string) => `checkpoint:${id}`;
+
+export const getCheckpoint = (id: string) =>
+  get<{ at: number; data: unknown }>(checkpointKey(id), agentStore).then((entry) => entry?.data ?? null);
+
+export const setCheckpoint = async (id: string, data: unknown) => {
+  await set(checkpointKey(id), { at: Date.now(), data }, agentStore);
+  const all = (await entries<string, { at: number }>(agentStore)).filter(([key]) =>
+    String(key).startsWith("checkpoint:"),
+  );
+  if (all.length > MAX_CHECKPOINTS) {
+    all.sort((a, b) => a[1].at - b[1].at);
+    await delMany(
+      all.slice(0, all.length - MAX_CHECKPOINTS).map(([key]) => key),
+      agentStore,
+    );
+  }
+};

@@ -1,0 +1,7 @@
+{
+  "name": "excalidraw-scenes-mcp",
+  "private": true,
+  "type": "module",
+  "bin": { "excalidraw-scenes-mcp": "server.mjs" },
+  "scripts": { "start": "node server.mjs" }
+}

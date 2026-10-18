@@ -1,0 +1,14 @@
+{
+  "name": "excalidraw-git",
+  "private": true,
+  "type": "module",
+  "description": "Local Excalidraw with git-backed multi-scene support. Upstream excalidraw lives untouched in ./excalidraw",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node scripts/start.mjs",
+    "start:server": "node scenes-server/server.mjs",
+    "start:app": "cd excalidraw/excalidraw-app && ../node_modules/.bin/vite --config ../../scenes-plugin/vite.config.mts",
+    "typecheck": "excalidraw/node_modules/.bin/tsc -p scenes-plugin/tsconfig.json",
+    "setup:domain": "herd proxy draw http://localhost:3001"
+  }
+}

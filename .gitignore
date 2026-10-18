@@ -1,0 +1,14 @@
+# upstream checkouts, cloned by `npm run setup`
+excalidraw/
+excalidraw-mcp/
+node_modules
+# scenes server's transport clone of the scenes repo
+scenes-server/.repo/
+# local config (see .env.example)
+.env
+.env.local
+# editor / tool state
+.idea/
+.playwright-mcp/
+.claude/settings.local.json
+.DS_Store
