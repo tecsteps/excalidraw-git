@@ -3,7 +3,7 @@ name: excalidraw-scenes
 description: Draw, co-edit, look at and save diagrams in the user's local Excalidraw (git-backed scenes, MCP server "excalidraw"). Use whenever the user asks to draw or change a diagram/sketch/scene in Excalidraw, wants to co-work on a drawing, asks what is on their canvas, or mentions Excalidraw scenes.
 ---
 
-# Excalidraw scenes — how to work with the user's drawings
+# Excalidraw scenes: how to work with the user's drawings
 
 The user runs a local Excalidraw app (http://draw.test) with **scenes**
 (named drawings, URL `http://draw.test/<scene>`) synced to a GitHub repo.
@@ -13,10 +13,10 @@ The MCP server `excalidraw` gives you tools for it. The user is often
 ## Golden rules
 
 1. **The open canvas is the truth while co-working.** It contains the user's
-   unsaved manual edits. Read it with `read_open_scene` — never assume it still
+   unsaved manual edits. Read it with `read_open_scene`; never assume it still
    looks like what you drew last time.
 2. **Always `read_open_scene` before you edit.** It reports what the user
-   changed since an agent last looked (`userChanges`), automatically — the
+   changed since an agent last looked (`userChanges`), automatically: the
    app stores a per-scene baseline (in the browser) after every
    `read_open_scene` / `edit_open_scene`. You don't need to remember revision
    ids, it works across conversations.
@@ -24,7 +24,7 @@ The MCP server `excalidraw` gives you tools for it. The user is often
    into the live canvas (the user's other work is untouched) and the user can
    undo your step with Cmd/Ctrl+Z.
 4. **Look at the result.** `edit_open_scene` returns an image of what you
-   changed. Use `view_scene` whenever you need to see something — it returns a
+   changed. Use `view_scene` whenever you need to see something; it returns a
    real PNG.
 5. If `edit_open_scene` answers with a **WARNING**, the user changed the scene
    since you last looked. Your edit was applied anyway: check the user's
@@ -33,7 +33,7 @@ The MCP server `excalidraw` gives you tools for it. The user is often
    know which scene you work on, pass it along: `read_open_scene(scene: "X")`
    and `edit_open_scene(expectScene: "X", …)` reach the tab showing X, even
    if the user is looking at another tab. If X isn't open anywhere you get an
-   error — ask the user or `open_scene("X")`. Never edit a different scene
+   error; ask the user or `open_scene("X")`. Never edit a different scene
    than the one the user asked for.
 
 ## Co-working loop
@@ -49,25 +49,25 @@ edit_open_scene(expectScene: "X", …)           → next change
 `userChanges` lists `added`, `modified` (with `changedFields`, e.g. `["x","y"]`
 = moved, `["text"]` = relabeled, `["backgroundColor"]` = recolored) and
 `deleted` elements. "First time an agent reads this scene" means there is no
-baseline yet — everything is new to you.
+baseline yet, so everything is new to you.
 
 ## Editing elements (`edit_open_scene`)
 
 - `add`: JSON array string, same format as `create_view` (call `read_me` once
   for the format): shapes with `label: { text }`, arrows with
-  `startBinding` / `endBinding: { elementId, fixedPoint }` — arrows may bind
+  `startBinding` / `endBinding: { elementId, fixedPoint }`; arrows may bind
   to existing shapes. Use new unique ids.
-- `update`: `[{ "id": "...", ...props }]` — move (`x`, `y`), resize, recolor,
+- `update`: `[{ "id": "...", ...props }]`: move (`x`, `y`), resize, recolor,
   change `text` of a text element (a shape's label is a text element with
   `containerId` = the shape id).
 - `delete`: ids (a shape's label goes with it).
 - Label an existing shape: add `{ "type": "text", "id": "...", "text": "...",
-  "containerId": "<shape id>" }` — it is centered automatically.
+  "containerId": "<shape id>" }`; it is centered automatically.
 
 ## Seeing scenes (they can be huge)
 
-- `view_scene()` — the open scene incl. unsaved edits; `view_scene(name)` — a
-  scene from GitHub; `view_scene(checkpointId)` — a `create_view` draft.
+- `view_scene()`: the open scene incl. unsaved edits; `view_scene(name)`: a
+  scene from GitHub; `view_scene(checkpointId)`: a `create_view` draft.
 - Zoom: `elementIds: [...]` (those elements + padding + whatever overlaps) or
   `region: {x, y, width, height}`; `maxSize` caps the image size.
 - Big scenes: `read_open_scene(summary: true)` / `get_scene(name, summary: true)`
@@ -102,7 +102,7 @@ baseline yet — everything is new to you.
 Nothing is stored by the servers: scenes live in the user's browser
 (localStorage / IndexedDB) and in the GitHub repo. Your `create_view`
 checkpoints and the change-tracking baselines are also kept by the app in the
-browser — so drawing needs the app open in a browser (or the hidden headless
+browser, so drawing needs the app open in a browser (or the hidden headless
 renderer the scenes server starts on demand when no tab is open; its
 checkpoints are gone when it stops).
 

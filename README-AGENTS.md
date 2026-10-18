@@ -2,7 +2,8 @@
 
 Coding agents (Claude Code, Codex, Cursor, …) can draw diagrams, save them as
 scenes to the GitHub repo, and switch the scene you have open, all through
-one MCP server: `scenes-mcp/server.mjs`.
+one MCP server: `scenes-mcp/server.mjs`. To install everything with an agent, use the
+prompt in [README.md](README.md#install-with-an-agent).
 
 ```
 agent ──MCP (stdio)──> scenes-mcp ──HTTP──> scenes-server ──git push──> GitHub (excalidrawscenes)
