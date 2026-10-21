@@ -7,18 +7,33 @@ import {
   CaptureUpdateAction,
   convertToExcalidrawElements,
   FONT_FAMILY,
+  Fonts,
   restoreElements,
 } from "@excalidraw/excalidraw";
-import { syncInvalidIndices } from "@excalidraw/element";
+import {
+  BOUND_TEXT_PADDING,
+  DEFAULT_FONT_SIZE,
+  getFontString,
+  getLineHeight,
+} from "@excalidraw/common";
+import { measureText, syncInvalidIndices } from "@excalidraw/element";
 
 import { BASE_URL, TAB_ID, scenesApi } from "./api";
 import { scenesController } from "./controller";
-import { editOpenScene, readOpenScene } from "./cowork";
+import {
+  editLocalScene,
+  editOpenScene,
+  editSceneOnGitHub,
+  readLocalScene,
+  readOpenScene,
+  saveLocalScene,
+} from "./cowork";
 import { renderScene } from "./render";
 import { getCheckpoint, setCheckpoint } from "./storage";
 
-import type { EditCommand, ReadCommand } from "./cowork";
+import type { EditCommand, LocalSceneCommand, ReadCommand, SceneEditCommand } from "./cowork";
 
+import type { ClashChoice } from "./merge";
 import type { RenderCommand } from "./render";
 
 type Command =
@@ -26,6 +41,7 @@ type Command =
   | { type: "open"; name: string }
   | { type: "create"; name: string }
   | { type: "save"; name?: string }
+  | { type: "local-only"; name: string; on: boolean }
   | { type: "convert"; elements: any[] }
   | { type: "preview"; elements: any[] }
   | { type: "rename"; name: string; to: string }
@@ -33,7 +49,18 @@ type Command =
   | { type: "clone"; name: string; to: string; open?: boolean }
   | { type: "checkpoint-save"; id: string; data: unknown }
   | { type: "checkpoint-load"; id: string }
-  | RenderCommand
+  | { type: "conflict-info"; name: string }
+  | { type: "flush"; name: string }
+  | SceneEditCommand
+  | LocalSceneCommand
+  | {
+      type: "conflict-resolve";
+      name: string;
+      resolution: "merge" | "mine" | "theirs" | "both";
+      choices?: Record<string, ClashChoice>;
+      otherwise?: ClashChoice;
+    }
+  | (RenderCommand & { conflict?: { name: string; side: "mine" | "theirs" } })
   | ReadCommand
   | EditCommand;
 
@@ -50,10 +77,22 @@ const PSEUDO_TYPES = new Set(["cameraUpdate", "delete", "restoreCheckpoint"]);
  * like what the agent drew.
  */
 const convertMcpElements = async (elements: any[]) => {
-  // text is measured during conversion — the hand-drawn font must be loaded,
-  // otherwise widths are computed with a fallback font and text gets clipped
+  // text is measured during conversion — the fonts (incl. the characters
+  // used) must be loaded, otherwise widths are computed with a fallback font
+  // and the text gets cut off in the user's browser
   await document.fonts.load("20px Excalifont").catch(() => {});
-  const real = elements.filter((el) => el && !PSEUDO_TYPES.has(el.type));
+  const textLike = elements
+    .filter((el) => el && (el.type === "text" || el.label?.text))
+    .map((el) => ({
+      type: "text",
+      fontFamily: el.label?.fontFamily ?? el.fontFamily ?? FONT_FAMILY.Excalifont,
+      text: el.label?.text ?? el.text ?? "",
+      originalText: el.label?.text ?? el.text ?? "",
+    }));
+  await Fonts.loadElementsFonts(textLike as any).catch(() => []);
+  const real = elements
+    .filter((el) => el && !PSEUDO_TYPES.has(el.type))
+    .map((el) => (el.label?.text && el.version === undefined ? fitLabel(el) : el));
   // elements that are already complete (e.g. from an existing scene) must not
   // be converted again — that would detach their bound text
   const needsConversion = (el: any) =>
@@ -70,6 +109,10 @@ const convertMcpElements = async (elements: any[]) => {
               textAlign: "center",
               verticalAlign: "middle",
               fontFamily: FONT_FAMILY.Excalifont,
+              // readable by default (else it takes the shape's border color)
+              strokeColor: "#1e1e1e",
+              // predictable id, so later edits can address the label
+              id: `${el.id}-label`,
               ...el.label,
             },
           }
@@ -129,8 +172,48 @@ const convertMcpElements = async (elements: any[]) => {
   }
   // normalize like the editor does on load (fractional indices, bindings, …)
   // so the committed file doesn't change again when the app saves it
+  // frames keep the position and size given: the converter fits frames with
+  // children to them whenever x / y is 0 (falsy)
+  for (const el of result) {
+    const raw = rawById.get(el.id);
+    if (raw && (el.type === "frame" || el.type === "magicframe") && needsConversion(raw)) {
+      for (const key of ["x", "y", "width", "height"] as const) {
+        if (typeof raw[key] === "number") {
+          el[key] = raw[key];
+        }
+      }
+    }
+  }
   syncInvalidIndices(result);
   return restoreElements(result, null, { repairBindings: true });
+};
+
+/**
+ * Grow a labelled shape so that no word of its label is broken across lines
+ * (e.g. "AI" in a small circle becoming "A/I"). Keeps the shape's center.
+ */
+const fitLabel = (el: any) => {
+  if (!["rectangle", "ellipse", "diamond"].includes(el.type) || !el.width) {
+    return el;
+  }
+  const fontSize = el.label.fontSize ?? DEFAULT_FONT_SIZE;
+  const fontFamily = el.label.fontFamily ?? FONT_FAMILY.Excalifont;
+  const font = getFontString({ fontSize, fontFamily });
+  const longestWord = Math.max(
+    ...String(el.label.text)
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((word) => measureText(word, font, getLineHeight(fontFamily)).width),
+  );
+  // usable width inside the shape (as Excalidraw lays out bound text)
+  const factor = el.type === "ellipse" ? Math.SQRT2 : el.type === "diamond" ? 2 : 1;
+  const needed = (longestWord + BOUND_TEXT_PADDING * 2 + 2) * factor;
+  if (el.width >= needed) {
+    return el;
+  }
+  const grow = needed - el.width;
+  const height = el.type === "rectangle" ? el.height : Math.max(el.height ?? 0, el.height ? (el.height * needed) / el.width : needed);
+  return { ...el, x: el.x - grow / 2, width: needed, ...(el.height ? { y: el.y - (height - el.height) / 2, height } : {}) };
 };
 
 // -----------------------------------------------------------------------------
@@ -215,15 +298,39 @@ const status = () => {
     // "name: status" — synced / ahead (not pushed) / behind / diverged / conflict / local
     scenes: list
       .filter((item) => item.name !== null)
-      .map(({ name, status, pendingRename }) =>
-        `${name}: ${status}${pendingRename ? ` (rename on GitHub pending, still "${pendingRename}" there)` : ""}`,
+      .map(({ name, status, pendingRename, localOnly }) =>
+        `${name}: ${status}${localOnly ? " (only in the user's browser, never synced to GitHub)" : scenesController.autoSyncFor(name!) ? "" : " (auto-sync off)"}${pendingRename ? ` (rename on GitHub pending, still "${pendingRename}" there)` : ""}`,
       ),
+    autoSyncInfo:
+      "The app pushes local changes of a scene to GitHub by itself (about 30 s after the last edit) and pulls/merges GitHub changes every 60 s, unless auto-sync is off for that scene. Local-only scenes are never synced. Agents don't need to push.",
   };
 };
 
+/** the agent's edits of one scene must not overtake each other */
+let agentEdits: Promise<unknown> = Promise.resolve();
+
 const runCommand = async (command: Command) => {
   switch (command.type) {
+    case "flush":
+      return scenesController.flush(command.name);
+    case "scene-edit": {
+      const run = agentEdits.then(() => editSceneOnGitHub(command, convertMcpElements));
+      agentEdits = run.catch(() => {});
+      return run;
+    }
     case "status":
+      return status();
+    case "local-read":
+      return readLocalScene(command);
+    case "local-edit": {
+      const run = agentEdits.then(() => editLocalScene(command, convertMcpElements));
+      agentEdits = run.catch(() => {});
+      return run;
+    }
+    case "local-save":
+      return saveLocalScene(command);
+    case "local-only":
+      await scenesController.setLocalOnly(command.name, command.on);
       return status();
     case "open":
       await scenesController.open(command.name);
@@ -257,7 +364,34 @@ const runCommand = async (command: Command) => {
       return { ok: true };
     case "checkpoint-load":
       return { data: await getCheckpoint(command.id) };
+    case "conflict-info":
+      return scenesController.conflictInfo(command.name);
+    case "conflict-resolve":
+      switch (command.resolution) {
+        case "merge":
+          return {
+            ...(await scenesController.resolveConflict(command.name, command.choices || {}, command.otherwise)),
+            ...status(),
+          };
+        case "mine":
+          await scenesController.keepMine(command.name);
+          return { resolved: true, kept: "mine (GitHub overwritten)", ...status() };
+        case "theirs":
+          await scenesController.takeTheirs(command.name);
+          return { resolved: true, kept: "GitHub's (local changes discarded)", ...status() };
+        case "both": {
+          const copy = await scenesController.keepBoth(command.name);
+          return { resolved: true, kept: `GitHub's; local version saved as "${copy}"`, copy, ...status() };
+        }
+      }
+      throw new Error(`Unknown resolution: ${(command as any).resolution}`);
     case "render":
+      if (command.conflict) {
+        const scene = await scenesController.conflictScene(command.conflict.name, command.conflict.side);
+        return renderScene({ ...command, scene }, () => {
+          throw new Error("unreachable");
+        }, convertMcpElements);
+      }
       return renderScene(
         command,
         () => {
@@ -322,6 +456,9 @@ export const connectLive = () => {
     } else if (["scene-saved", "scene-renamed", "scene-deleted"].includes(event.type)) {
       if (IS_RENDERER || event.source === `app:${TAB_ID}`) {
         return;
+      }
+      if (event.type === "scene-renamed") {
+        await scenesController.followRemoteRename(event.from, event.to, event.sha ?? null);
       }
       // someone else pushed: check and sync (visible in the activity log)
       scenesController.syncNow();

@@ -21,7 +21,8 @@ import {
 import { hashElementsVersion, hashString } from "@excalidraw/element";
 
 import { scenesApi, SCENE_NAME_RE } from "./api";
-import { mergeElements } from "./merge";
+import { changedFields, live, mergeElements, MERGE_VERSION } from "./merge";
+import type { ClashChoice } from "./merge";
 import {
   META_KEY,
   UNTITLED,
@@ -57,6 +58,8 @@ export type SyncStatus =
   | "conflict"
   /** never pushed */
   | "local"
+  /** kept only in this browser on purpose: never synced */
+  | "local-only"
   /** not named yet */
   | "untitled";
 
@@ -67,6 +70,8 @@ export type SceneListItem = {
   dirty: boolean;
   onGitHub: boolean;
   autoSync: boolean;
+  /** kept only in this browser, never synced to GitHub */
+  localOnly: boolean;
   updatedAt?: string | null;
   /** renamed here, not yet on GitHub: the name it still has there */
   pendingRename?: string;
@@ -100,12 +105,16 @@ export type ScenesState = {
   activity: Activity[];
   /** clashing element ids of the active scene, if it is in conflict */
   conflict: { clashes: string[] } | null;
+  /** the open scene is a local copy being checked against GitHub (read-only) */
+  checking: boolean;
 };
 
 /** push the active scene after this long without changes */
 export const IDLE_PUSH_MS = 30_000;
 /** check GitHub for changes this often */
 export const POLL_MS = 60_000;
+/** a just-opened local copy is read-only at most this long while GitHub is asked */
+const CHECK_LOCK_MS = 3_000;
 
 const sceneHash = (
   elements: readonly ExcalidrawElement[],
@@ -130,6 +139,15 @@ const hashJson = (json: string) => {
 
 const isEmptyJson = (json: string) =>
   !getNonDeletedElements(JSON.parse(json).elements || []).length;
+
+/** scene JSON whose appState.name is `name` (the server checks it) */
+export const withSceneName = (json: string, name: string) => {
+  const data = JSON.parse(json);
+  if (data.appState?.name === name) {
+    return json;
+  }
+  return JSON.stringify({ ...data, appState: { ...(data.appState || {}), name } });
+};
 
 const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -168,6 +186,7 @@ class ScenesController {
     },
     activity: [],
     conflict: null,
+    checking: false,
   };
 
   constructor() {
@@ -252,7 +271,7 @@ class ScenesController {
     const waitForLoad = () =>
       api.getAppState().isLoading
         ? setTimeout(waitForLoad, 100)
-        : this.readyDeferred.resolve();
+        : this.adoptInitialCanvas().finally(() => this.readyDeferred.resolve());
     waitForLoad();
     this.unsubscribeChange?.();
     this.api = api;
@@ -264,6 +283,25 @@ class ScenesController {
     window.addEventListener("storage", this.onStorage);
     document.addEventListener("visibilitychange", this.onVisibility);
     this.onSceneChange(api.getSceneElementsIncludingDeleted(), api.getAppState());
+  }
+
+  /**
+   * The app restores the canvas the browser saved last — possibly by another
+   * tab showing another scene. The canvas says which scene it is
+   * (appState.name); if that isn't this tab's scene, load the right one.
+   */
+  private async adoptInitialCanvas() {
+    const current = this.meta.current;
+    const shown = this.api?.getAppState().name;
+    if (current === null || shown === current) {
+      return;
+    }
+    try {
+      await this.openInner(current, { stash: false, force: true });
+      this.log("info", `Loaded "${current}" (the restored canvas belonged to "${shown}")`);
+    } catch (error) {
+      console.error("[scenes] could not load the current scene", error);
+    }
   }
 
   /** start polling / auto-sync (not in the hidden renderer tab) */
@@ -290,9 +328,10 @@ class ScenesController {
     document.removeEventListener("visibilitychange", this.onVisibility);
   }
 
-  /** another tab may have switched scenes (the app syncs the canvas itself) */
+  /** other tabs may have changed scene metadata; this tab keeps its own scene */
   private onFocus = () => {
-    this.meta = loadMeta();
+    const { current, baseline } = this.meta;
+    this.meta = { ...loadMeta(), current, baseline };
     this.lastVersionKey = "";
     if (this.api) {
       this.onSceneChange(this.api.getSceneElementsIncludingDeleted(), this.api.getAppState());
@@ -382,8 +421,12 @@ class ScenesController {
     return this.meta.scenes[name]?.autoSync;
   }
 
+  isLocalOnly(name: string | null) {
+    return name !== null && !!this.meta.scenes[name]?.localOnly;
+  }
+
   autoSyncFor(name: string | null) {
-    if (name === null) {
+    if (name === null || this.isLocalOnly(name)) {
       return false;
     }
     return this.meta.scenes[name]?.autoSync ?? this.meta.autoSync;
@@ -422,6 +465,9 @@ class ScenesController {
       return "untitled";
     }
     const meta = this.meta.scenes[name];
+    if (meta?.localOnly) {
+      return "local-only";
+    }
     if (meta?.conflict) {
       return "conflict";
     }
@@ -476,6 +522,7 @@ class ScenesController {
           dirty: this.isDirty(name),
           onGitHub: remote ? true : !!meta?.remoteSha,
           autoSync: this.autoSyncFor(name),
+          localOnly: !!meta?.localOnly,
           updatedAt: remote?.updatedAt,
           ...(meta?.renamedFrom ? { pendingRename: meta.renamedFrom } : {}),
         };
@@ -487,6 +534,7 @@ class ScenesController {
         dirty: this.state.current === null ? this.state.dirty : true,
         onGitHub: false,
         autoSync: false,
+        localOnly: false,
       });
     }
     return list;
@@ -533,6 +581,46 @@ class ScenesController {
       this.syncNow();
     }
   };
+
+  /**
+   * Keep a scene only in this browser (never pushed or pulled), or sync it
+   * again. A copy already on GitHub stays there unchanged meanwhile; when
+   * syncing is turned on again, both versions are merged as usual.
+   */
+  setLocalOnly = (name: string, on: boolean) =>
+    this.exclusive(async () => {
+      await this.ready;
+      const meta = this.sceneMeta(name);
+      if (on === !!meta.localOnly) {
+        return;
+      }
+      if (on && meta.conflict) {
+        throw new Error(`"${name}" has a conflict — resolve it first`);
+      }
+      if (on && meta.renamedFrom) {
+        throw new Error(`The rename of "${name}" is not on GitHub yet — try again once it is`);
+      }
+      if (on) {
+        meta.localOnly = true;
+      } else {
+        delete meta.localOnly;
+      }
+      this.persistMeta();
+      this.refresh();
+      this.log(
+        "info",
+        on
+          ? `"${name}" is local only now — not synced to GitHub${this.remoteShaOf(name) ? " (the copy there stays as it is)" : ""}`
+          : `"${name}" is synced with GitHub again`,
+      );
+    }).then(() => {
+      if (!on && this.autoSyncFor(name)) {
+        if (name === this.meta.current) {
+          this.pushCurrentNow = true;
+        }
+        this.syncNow();
+      }
+    });
 
   // ---------------------------------------------------------------------------
   // local content
@@ -659,13 +747,95 @@ class ScenesController {
     });
   }
 
-  /** switch to a scene (null = untitled draft) */
-  open = (name: string | null) => this.withBusy("loading", () => this.openInner(name));
+  /**
+   * switch to a scene (null = untitled draft). Not queued behind sync steps
+   * (a push can hang for seconds on a bad connection) — those re-check
+   * afterwards whether the scene is still the open one. Opens run one at a time.
+   */
+  open = (name: string | null) => {
+    const run = this.openChain.then(async () => {
+      await this.ready;
+      this.setState({ busy: "loading", error: null });
+      try {
+        return await this.openInner(name);
+      } catch (error: any) {
+        console.error(error);
+        this.setState({ error: error.message });
+        throw error;
+      } finally {
+        this.setState({ busy: null });
+      }
+    });
+    this.openChain = run.catch(() => {});
+    return run;
+  };
 
-  private async openInner(name: string | null, { stash = true } = {}) {
-      if (name === this.meta.current) {
+  private openChain: Promise<unknown> = Promise.resolve();
+
+  /** editing is locked while a just-opened local copy is checked against GitHub */
+  private openLock: { token: number; viewMode: boolean } | null = null;
+  private openToken = 0;
+
+  private releaseOpenLock() {
+    if (this.openLock) {
+      this.requireApi().updateScene({
+        appState: { viewModeEnabled: this.openLock.viewMode },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      this.openLock = null;
+      this.setState({ checking: false });
+    }
+  }
+
+  /**
+   * The local copy is on screen (read-only); ask GitHub for a newer version.
+   * Editing unlocks when GitHub answers, or after CHECK_LOCK_MS at the latest
+   * (then the sync merges whatever comes later).
+   */
+  private checkOpenedScene(name: string) {
+    const api = this.requireApi();
+    const token = ++this.openToken;
+    this.openLock = { token, viewMode: api.getAppState().viewModeEnabled };
+    api.updateScene({ appState: { viewModeEnabled: true }, captureUpdate: CaptureUpdateAction.NEVER });
+    this.setState({ checking: true });
+    const release = () => {
+      if (this.openLock?.token === token) {
+        this.releaseOpenLock();
+      }
+    };
+    const timer = window.setTimeout(release, CHECK_LOCK_MS);
+    scenesApi
+      .load(name)
+      .then(async (latest) => {
+        if (this.openToken !== token || this.meta.current !== name || this.isDirty(name)) {
+          return; // switched on, or edited after the unlock: sync takes it from here
+        }
+        const meta = this.sceneMeta(name);
+        this.updateRemoteSha(name, latest.sha);
+        if (latest.sha === meta.baseSha) {
+          return; // the local copy is up to date
+        }
+        this.applyScene(latest.json, name, { keepView: true });
+        Object.assign(meta, { baseSha: latest.sha, remoteSha: latest.sha, dirty: false });
+        delete meta.legacy;
+        this.persistMeta();
+        await this.setBaselineFromCanvas();
+        this.log("pull", `Updated "${name}" from GitHub`);
+        this.refresh();
+      })
+      .catch(() => {}) // offline: the local copy it is
+      .finally(() => {
+        window.clearTimeout(timer);
+        release();
+      });
+  }
+
+  private async openInner(name: string | null, { stash = true, force = false } = {}) {
+      if (name === this.meta.current && !force) {
         return;
       }
+      this.releaseOpenLock();
+      ++this.openToken; // a pending check of the previous scene must not apply
       if (stash) {
         await this.stashCurrent();
       }
@@ -674,6 +844,7 @@ class ScenesController {
       let json: string | null = null;
       let baseline: number | null = null;
       let loadedSha: string | null = null;
+      let checkGitHub = false;
       const meta = name === null ? undefined : this.meta.scenes[name];
 
       if (name === null || (snapshot && (snapshot.dirty || meta?.conflict))) {
@@ -688,19 +859,16 @@ class ScenesController {
           );
         }
         json = snapshot.json;
+      } else if (snapshot) {
+        // show the local copy (no local changes) right away, check GitHub in
+        // the background; it is its own base
+        json = snapshot.json;
+        checkGitHub = true;
       } else {
-        try {
-          const latest = await scenesApi.load(name);
-          json = latest.json;
-          loadedSha = latest.sha;
-        } catch (error) {
-          const apiError = error as ApiError;
-          if (snapshot) {
-            json = snapshot.json; // offline or not on GitHub: local copy
-          } else {
-            throw apiError;
-          }
-        }
+        // never opened here: GitHub's version is all there is
+        const latest = await scenesApi.load(name);
+        json = latest.json;
+        loadedSha = latest.sha;
       }
 
       this.applyScene(json, name);
@@ -731,10 +899,13 @@ class ScenesController {
       if (elements.length) {
         api.setViewport({ target: elements, fit: "scale-down" });
       }
+      if (checkGitHub && name !== null) {
+        this.checkOpenedScene(name);
+      }
   }
 
   /** create a new, empty named scene and switch to it */
-  create = (name: string) =>
+  create = (name: string, { localOnly = false } = {}) =>
     this.withBusy("loading", async () => {
       this.validateName(name);
       if (this.exists(name)) {
@@ -745,7 +916,7 @@ class ScenesController {
       this.applyScene(null, name);
       this.meta.current = name;
       this.meta.baseline = null;
-      this.meta.scenes[name] = this.claimName(name, false);
+      this.meta.scenes[name] = localOnly ? { baseSha: null, dirty: false, localOnly } : this.claimName(name, false);
       this.persistMeta();
       await nextFrame();
       this.setState({ current: name });
@@ -799,9 +970,11 @@ class ScenesController {
    * Push the active scene now. With `name`: name an untitled scene, or
    * "save as" under a new name.
    */
-  save = (name?: string) =>
+  save = (name?: string, { localOnly }: { localOnly?: boolean } = {}) =>
     this.withBusy("saving", async () => {
       const targetName = name ?? this.meta.current;
+      // "save as" of a local-only scene stays local only (unless said otherwise)
+      const keepLocal = localOnly ?? this.isLocalOnly(this.meta.current);
       if (targetName === null) {
         throw new Error("Scene needs a name");
       }
@@ -822,11 +995,16 @@ class ScenesController {
         }
         this.meta.current = targetName;
         this.meta.baseline = null;
-        this.meta.scenes[targetName] = this.claimName(targetName, true);
+        this.meta.scenes[targetName] = keepLocal
+          ? { baseSha: null, dirty: true, localOnly: true }
+          : this.claimName(targetName, true);
         api.updateScene({ appState: { name: targetName }, captureUpdate: CaptureUpdateAction.NEVER });
         await setSnapshot(targetName, { json, baseline: null, dirty: true });
         this.persistMeta();
         this.setState({ current: targetName, dirty: true });
+      }
+      if (this.isLocalOnly(targetName)) {
+        return { name: targetName, localOnly: true }; // the browser keeps it, nothing to push
       }
       const result = await this.pushScene(targetName, { manual: true });
       if (this.meta.scenes[targetName]?.conflict) {
@@ -911,6 +1089,9 @@ class ScenesController {
           await this.exclusive(() => this.pushScene(name));
         } else if (status === "diverged") {
           await this.exclusive(() => this.mergeScene(name));
+        } else if (status === "conflict" && this.conflictOutdated(name)) {
+          // GitHub moved on, or found by an older merge: maybe it merges now
+          await this.exclusive(() => this.mergeScene(name));
         }
       }
     } catch (error: any) {
@@ -925,6 +1106,12 @@ class ScenesController {
       }
     }
   };
+
+  private conflictOutdated(name: string) {
+    const conflict = this.meta.scenes[name]?.conflict;
+    const remote = this.remoteShaOf(name);
+    return !!conflict && (conflict.v !== MERGE_VERSION || (!!remote && remote !== conflict.remoteSha));
+  }
 
   private pushDue() {
     return this.pushCurrentNow || Date.now() - this.lastChangeAt >= IDLE_PUSH_MS;
@@ -957,6 +1144,9 @@ class ScenesController {
 
   /** push local content; on "GitHub changed meanwhile" merge instead */
   private async pushScene(name: string, { manual = false } = {}) {
+    if (this.isLocalOnly(name)) {
+      return null; // never leaves this browser
+    }
     if (this.meta.scenes[name]?.renamedFrom) {
       // the rename has to reach GitHub before the content can
       await this.pushPendingRename(name);
@@ -968,11 +1158,23 @@ class ScenesController {
       }
     }
     const isCurrent = name === this.meta.current;
-    const canvas = isCurrent ? this.serializeCurrent() : null;
-    const json = canvas ? canvas.json : await this.localJson(name);
-    if (json === null) {
+    if (isCurrent && this.requireApi().getAppState().name !== name) {
+      // the canvas shows another scene's drawing: never push it under this name
+      const message = `Not pushed: this tab's canvas belongs to "${this.requireApi().getAppState().name}", not "${name}". Reload the tab.`;
+      this.log("error", message);
+      if (manual) {
+        throw new Error(message);
+      }
       return null;
     }
+    const canvas = isCurrent ? this.serializeCurrent() : null;
+    const stored = canvas ? canvas.json : await this.localJson(name);
+    if (stored === null) {
+      return null;
+    }
+    // the file names its scene (the server rejects content of another scene);
+    // stored copies may still carry an old name (e.g. from before a rename)
+    const json = withSceneName(stored, name);
     const meta = this.sceneMeta(name);
     const remote = this.remoteShaOf(name);
     const base = remote === null ? "none" : meta.baseSha ?? "none";
@@ -1015,7 +1217,15 @@ class ScenesController {
       this.persistMeta();
       this.recomputeDirty();
     } else {
-      await setSnapshot(name, { json, baseline: hashJson(json), dirty: false });
+      const stored = await getSnapshot(name);
+      if (stored && withSceneName(stored.json, name) !== json) {
+        // edited while the push was on its way (and stashed by a switch):
+        // the pushed version is the new base, the later edits stay
+        await setSnapshot(name, { ...stored, baseline: hashJson(json), dirty: true });
+        meta.dirty = true;
+      } else {
+        await setSnapshot(name, { json, baseline: hashJson(json), dirty: false });
+      }
     }
     this.persistMeta();
     this.log("push", result.changed ? `Pushed "${name}" (${result.commit?.slice(0, 7)})` : `"${name}" already up to date`);
@@ -1052,7 +1262,13 @@ class ScenesController {
   }
 
   /** both sides changed: three-way merge per element */
-  private async mergeScene(name: string, { pushAfter = this.autoSyncFor(name) } = {}) {
+  private async mergeScene(
+    name: string,
+    {
+      pushAfter = this.autoSyncFor(name),
+      choices = {} as Record<string, ClashChoice>,
+    } = {},
+  ) {
     const mineJson = await this.localJson(name);
     let theirs;
     try {
@@ -1081,12 +1297,18 @@ class ScenesController {
     }
     const mine = JSON.parse(mineJson);
     const theirsData = JSON.parse(theirs.json);
-    const merged = mergeElements(base?.elements, mine.elements || [], theirsData.elements || []);
+    // the merge is based on mineJson: if the scene changed while GitHub was
+    // asked (edited, or switched to/away), drop this round — the next sync merges
+    const unchanged = async () =>
+      name === this.meta.current
+        ? this.serializeCurrent().json === mineJson
+        : (await getSnapshot(name))?.json === mineJson;
+    const merged = mergeElements(base?.elements, mine.elements || [], theirsData.elements || [], choices);
     meta.remoteSha = theirs.sha;
     this.updateRemoteSha(name, theirs.sha);
 
     if (merged.clashes.length) {
-      meta.conflict = { remoteSha: theirs.sha, clashes: merged.clashes };
+      meta.conflict = { remoteSha: theirs.sha, clashes: merged.clashes, v: MERGE_VERSION };
       this.persistMeta();
       this.log(
         "conflict",
@@ -1101,6 +1323,9 @@ class ScenesController {
       elements: merged.elements,
       files: { ...(theirsData.files || {}), ...(mine.files || {}) },
     });
+    if (!(await unchanged())) {
+      return null;
+    }
     meta.baseSha = theirs.sha;
     delete meta.conflict;
     if (name === this.meta.current) {
@@ -1201,8 +1426,16 @@ class ScenesController {
   private async dropScenesDeletedOnGitHub() {
     const remote = new Set((this.state.remote ?? []).map((scene) => scene.name));
     for (const [name, meta] of Object.entries(this.meta.scenes)) {
+      if (meta.localOnly && meta.baseSha && !remote.has(meta.renamedFrom ?? name)) {
+        // its old copy on GitHub is gone: the local scene is all there is
+        meta.baseSha = null;
+        meta.dirty = true;
+        this.persistMeta();
+        continue;
+      }
       if (
         name === UNTITLED ||
+        meta.localOnly ||
         !meta.baseSha ||
         meta.renamedFrom ||
         meta.conflict ||
@@ -1287,8 +1520,13 @@ class ScenesController {
       if (meta?.conflict) {
         throw new Error(`"${from}" has a conflict — resolve it first`);
       }
-      const githubName = meta?.renamedFrom ?? (this.remoteShaOf(from) ? from : null);
+      // local-only scenes are renamed here only (a copy on GitHub keeps its name)
+      const githubName = meta?.localOnly ? null : meta?.renamedFrom ?? (this.remoteShaOf(from) ? from : null);
       const next: SceneMeta = { ...(meta ?? { baseSha: null, dirty: false }) };
+      if (meta?.localOnly && meta.baseSha) {
+        next.baseSha = null; // no longer related to the GitHub copy
+        next.dirty = true;
+      }
       delete next.renamedFrom;
 
       if (githubName) {
@@ -1336,6 +1574,63 @@ class ScenesController {
       );
     });
 
+  /**
+   * An agent is about to read or edit this scene: push its unpushed changes
+   * now instead of after the idle delay (sync only, the canvas is untouched).
+   * Scenes with auto-sync off stay as they are: the user decides.
+   */
+  flush = (name: string) =>
+    this.exclusive(async () => {
+      await this.ready;
+      if (!this.meta.scenes[name] && name !== this.meta.current) {
+        return { status: "unknown" as const, autoSync: true };
+      }
+      if (this.isLocalOnly(name)) {
+        return { status: "local-only" as const, autoSync: false, localOnly: true };
+      }
+      const autoSync = this.autoSyncFor(name);
+      const status = this.statusOf(name);
+      if (autoSync && (status === "ahead" || (status === "local" && this.isDirty(name)))) {
+        if (name === this.meta.current) {
+          this.pushCurrentNow = true;
+        }
+        await this.pushScene(name);
+      } else if (autoSync && status === "diverged") {
+        await this.mergeScene(name);
+      }
+      return { status: this.statusOf(name), autoSync };
+    });
+
+  /** renamed elsewhere (an agent, another machine): move the local copy along */
+  followRemoteRename = (from: string, to: string, sha: string | null) =>
+    this.exclusive(async () => {
+      await this.ready;
+      const meta = this.meta.scenes[from];
+      if (!meta || this.meta.scenes[to] || meta.renamedFrom || meta.conflict || meta.localOnly) {
+        return; // unknown here, or a local rename/conflict is pending: sync sorts it out
+      }
+      if (from !== this.meta.current) {
+        const snapshot = await getSnapshot(from);
+        if (snapshot) {
+          await setSnapshot(to, snapshot);
+          await deleteSnapshot(from);
+        }
+      }
+      delete this.meta.scenes[from];
+      this.meta.scenes[to] = meta; // same content, same blob sha
+      if (from === this.meta.current) {
+        this.meta.current = to;
+        this.requireApi().updateScene({ appState: { name: to }, captureUpdate: CaptureUpdateAction.NEVER });
+      }
+      await moveAgentBaseline(from, to);
+      this.updateRemoteSha(from, null);
+      this.updateRemoteSha(to, sha);
+      this.persistMeta();
+      this.setState({ current: this.meta.current });
+      this.log("info", `"${from}" was renamed to "${to}" on GitHub`);
+      this.refresh();
+    });
+
   /** delete a scene here and on GitHub (only the version you know of there) */
   remove = (name: string) =>
     this.withBusy("saving", async () => {
@@ -1343,7 +1638,8 @@ class ScenesController {
       this.requireScene(name);
       const meta = this.meta.scenes[name];
       const githubName = meta?.renamedFrom ?? name;
-      const githubSha = this.remoteShaOf(name) ?? meta?.conflict?.remoteSha ?? null;
+      // local-only scenes are deleted here only (a copy on GitHub stays)
+      const githubSha = meta?.localOnly ? null : this.remoteShaOf(name) ?? meta?.conflict?.remoteSha ?? null;
       let queued = false;
       if (githubSha) {
         try {
@@ -1394,11 +1690,13 @@ class ScenesController {
       const data = JSON.parse(json);
       json = JSON.stringify({ ...data, appState: { ...(data.appState || {}), name: to } });
       await setSnapshot(to, { json, baseline: null, dirty: true });
-      const autoSync = this.meta.scenes[name]?.autoSync;
-      this.meta.scenes[to] = {
-        ...this.claimName(to, true),
-        ...(autoSync !== undefined ? { autoSync } : {}),
-      };
+      const { autoSync, localOnly } = this.meta.scenes[name] ?? {};
+      this.meta.scenes[to] = localOnly
+        ? { baseSha: null, dirty: true, localOnly: true }
+        : {
+            ...this.claimName(to, true),
+            ...(autoSync !== undefined ? { autoSync } : {}),
+          };
       this.persistMeta();
       this.log("info", `Duplicated "${name}" as "${to}"`);
       if (open) {
@@ -1408,6 +1706,63 @@ class ScenesController {
       }
       this.refresh();
       this.syncNow(); // auto-sync pushes the copy
+    });
+
+  // ---------------------------------------------------------------------------
+  // local-only scenes for agents: they exist only in this browser, so agents
+  // read and edit them through this tab
+  // ---------------------------------------------------------------------------
+
+  private requireLocalOnly(name: string) {
+    if (!this.isLocalOnly(name)) {
+      throw Object.assign(new Error(`"${name}" is not a local-only scene`), { status: 404 });
+    }
+  }
+
+  /** content of a local-only scene (the canvas if it is open) */
+  localOnlyJson = (name: string) =>
+    this.exclusive(async () => {
+      await this.ready;
+      this.requireLocalOnly(name);
+      const json = await this.localJson(name);
+      return withSceneName(json ?? serializeAsJSON([], { name } as any, {}, "local"), name);
+    });
+
+  /** replace a local-only scene's content (applied to the canvas if it is open) */
+  writeLocalOnly = (name: string, json: string) =>
+    this.exclusive(async () => {
+      await this.ready;
+      this.requireLocalOnly(name);
+      await this.writeLocal(name, withSceneName(json, name), { dirty: true });
+      this.persistMeta();
+      this.refresh();
+    });
+
+  /** a new local-only scene with this content (replace: an existing local-only one) */
+  createLocalOnly = (name: string, json: string, { replace = false } = {}) =>
+    this.exclusive(async () => {
+      await this.ready;
+      this.validateName(name);
+      if (this.exists(name) && !(replace && this.isLocalOnly(name))) {
+        throw Object.assign(
+          new Error(
+            this.isLocalOnly(name)
+              ? `A local-only scene named "${name}" already exists`
+              : `A scene named "${name}" already exists (synced with GitHub)`,
+          ),
+          { status: 409 },
+        );
+      }
+      json = withSceneName(json, name);
+      this.meta.scenes[name] = { ...(this.meta.scenes[name] ?? {}), baseSha: null, dirty: true, localOnly: true };
+      if (name === this.meta.current) {
+        await this.writeLocal(name, json, { dirty: true });
+      } else {
+        await setSnapshot(name, { json, baseline: null, dirty: true });
+      }
+      this.persistMeta();
+      this.refresh();
+      this.log("info", `Agent saved "${name}" (local only)`);
     });
 
   // ---------------------------------------------------------------------------
@@ -1445,6 +1800,96 @@ class ScenesController {
 
   /** throw away local changes of a scene, load the latest version from GitHub */
   discardLocal = (name: string) => this.takeTheirs(name);
+
+  /** the three versions of a scene in conflict (for agents) */
+  private async conflictVersions(name: string) {
+    const meta = this.meta.scenes[name];
+    if (!meta?.conflict) {
+      throw new Error(`"${name}" has no conflict`);
+    }
+    const mineJson = await this.localJson(name);
+    if (mineJson === null) {
+      throw new Error(`"${name}" has no local version`);
+    }
+    const theirs = JSON.parse((await scenesApi.load(name, meta.conflict.remoteSha)).json);
+    let base: any = null;
+    if (meta.baseSha) {
+      try {
+        base = JSON.parse((await scenesApi.load(name, meta.baseSha)).json);
+      } catch {
+        base = null;
+      }
+    }
+    return { meta, mine: JSON.parse(mineJson), theirs, base };
+  }
+
+  /** what clashes: per element the base, my and GitHub's version */
+  conflictInfo = async (name: string) => {
+    const { meta, mine, theirs, base } = await this.conflictVersions(name);
+    const merged = mergeElements(base?.elements, mine.elements || [], theirs.elements || []);
+    const [b, m, t] = [live(base?.elements), live(mine.elements), live(theirs.elements)];
+    return {
+      scene: name,
+      githubSha: meta.conflict!.remoteSha,
+      baseKnown: !!base,
+      autoMerged: { fromMine: merged.fromMine, fromGitHub: merged.fromTheirs },
+      clashes: merged.clashes.map((id) => {
+        const [be, me, te] = [b.get(id), m.get(id), t.get(id)];
+        return {
+          id,
+          base: be ?? null,
+          mine: me ?? null,
+          theirs: te ?? null,
+          mineChanged: me ? (be ? changedFields(be, me) : ["added"]) : ["deleted"],
+          theirsChanged: te ? (be ? changedFields(be, te) : ["added"]) : ["deleted"],
+        };
+      }),
+    };
+  };
+
+  /** one side of a conflict as a scene, e.g. to render it */
+  conflictScene = async (name: string, side: "mine" | "theirs") => {
+    const versions = await this.conflictVersions(name);
+    const data = versions[side];
+    return { elements: data.elements || [], files: data.files || {}, appState: data.appState || {} };
+  };
+
+  /**
+   * Settle a conflict element by element: merge both versions, take my or
+   * GitHub's version for each clashing element (choices, else `otherwise`),
+   * and push. Elements changed on one side only are merged as usual.
+   */
+  resolveConflict = (
+    name: string,
+    choices: Record<string, ClashChoice>,
+    otherwise?: ClashChoice,
+  ) =>
+    this.withBusy("saving", async () => {
+      const meta = this.meta.scenes[name];
+      if (!meta?.conflict) {
+        throw new Error(`"${name}" has no conflict`);
+      }
+      const all = { ...choices };
+      if (otherwise) {
+        for (const id of meta.conflict.clashes) {
+          all[id] ??= otherwise;
+        }
+      }
+      const missing = meta.conflict.clashes.filter((id) => !all[id]);
+      if (missing.length) {
+        throw new Error(
+          `No decision for ${missing.length} clashing element(s): ${missing.slice(0, 20).join(", ")}${missing.length > 20 ? ", …" : ""}. Pass a choice per id or "otherwise".`,
+        );
+      }
+      await this.mergeScene(name, { pushAfter: true, choices: all });
+      const left = this.meta.scenes[name]?.conflict;
+      if (left) {
+        // GitHub changed again meanwhile and the new version clashes, too
+        return { resolved: false, clashes: left.clashes };
+      }
+      this.log("info", `"${name}": conflict resolved element by element`);
+      return { resolved: true, status: this.statusOf(name) };
+    });
 
   /** keep the local version as a copy, take GitHub's for this scene */
   keepBoth = async (name: string) => {

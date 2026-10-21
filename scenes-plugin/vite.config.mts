@@ -64,6 +64,14 @@ const injectScenesPlugin = () => ({
     if (!sidebar.test(code)) {
       fail("anchor `<AppSidebar />` not found");
     }
+    // upstream copies the canvas another tab saved last into this tab when
+    // it gets focus — with scenes, that is another scene's drawing (which
+    // auto-sync would then push under this tab's scene name). Each tab keeps
+    // its own scene; changes reach other tabs through the sync.
+    const tabSync = "if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {";
+    if (!code.includes(tabSync)) {
+      fail("anchor for the cross-tab canvas sync not found");
+    }
     return {
       code:
         `import { ScenesTopLeftUI, ScenesSidebar } from ${JSON.stringify(
@@ -74,9 +82,86 @@ const injectScenesPlugin = () => ({
             topRight,
             "$1renderTopLeftUI={(isMobile) => <ScenesTopLeftUI isMobile={isMobile} />}$1renderTopRightUI={",
           )
-          .replace(sidebar, (match) => `${match}\n<ScenesSidebar />`),
+          .replace(sidebar, (match) => `${match}\n<ScenesSidebar />`)
+          .replace(tabSync, "if (false /* excalidraw-scenes: tabs keep their own scene */) {"),
       map: null,
     };
+  },
+});
+
+const TEXT_PADDING_ENTRY = path.resolve(HERE, "src/textPadding.tsx");
+
+/**
+ * Text padding per shape (`customData.textPadding`, default 5px): Excalidraw
+ * lays out a shape's text with a fixed BOUND_TEXT_PADDING. These patches make
+ * the layout (wrap width, position, auto-grow, the text editor) read the
+ * shape's own value, and add a slider below Opacity in the properties panel.
+ */
+const textPadding = () => ({
+  name: "excalidraw-scenes-text-padding",
+  enforce: "pre" as const,
+  transform(code: string, id: string) {
+    const file = id.replace(/\\/g, "/").split("?")[0];
+    const patch = (name: string, steps: Array<[string | RegExp, string, number?]>) => {
+      let next = code;
+      for (const [from, to, count = 1] of steps) {
+        const found =
+          typeof from === "string" ? next.split(from).length - 1 : (next.match(new RegExp(from.source, "g")) || []).length;
+        if (found !== count) {
+          throw new Error(
+            `[excalidraw-scenes] text padding: ${name} changed upstream (expected ${count}× ${String(from).slice(0, 60)}, found ${found}). Update scenes-plugin/vite.config.mts.`,
+          );
+        }
+        next = typeof from === "string" ? next.split(from).join(to) : next.replace(new RegExp(from.source, "g"), to);
+      }
+      return { code: next, map: null };
+    };
+    const resize = /computeContainerDimensionForBoundText\(\s*([\w.]+),\s*container\.type,\s*\)/;
+    if (file.endsWith("/packages/element/src/textElement.ts")) {
+      const firstExport = code.indexOf("\nexport const ");
+      code =
+        code.slice(0, firstExport) +
+        "\nconst __textPadding = (container: any): number =>\n  typeof container?.customData?.textPadding === \"number\" ? container.customData.textPadding : BOUND_TEXT_PADDING;\n" +
+        code.slice(firstExport);
+      // the max text width / height of a shape, and its text position
+      const maxWidth = code.slice(code.indexOf("export const getBoundTextMaxWidth"), code.indexOf("export const getBoundTextMaxHeight"));
+      const maxHeightStart = code.indexOf("export const getBoundTextMaxHeight");
+      const maxHeightEnd = code.indexOf("\n};", maxHeightStart);
+      const maxHeight = code.slice(maxHeightStart, maxHeightEnd);
+      if (!maxWidth || !maxHeight) {
+        throw new Error("[excalidraw-scenes] text padding: getBoundTextMaxWidth/Height not found upstream");
+      }
+      code = code
+        .replace(maxWidth, maxWidth.split("BOUND_TEXT_PADDING * 2").join("__textPadding(container) * 2").replace(": BOUND_TEXT_PADDING) *", ": __textPadding(container)) *"))
+        .replace(maxHeight, maxHeight.split("BOUND_TEXT_PADDING * 2").join("__textPadding(container) * 2"));
+      return patch("textElement.ts", [
+        ["    : BOUND_TEXT_PADDING;\n  let offsetX = padding;", "    : __textPadding(container);\n  let offsetX = padding;"],
+        [
+          "  containerType: ExtractSetType<typeof VALID_CONTAINER_TYPES>,\n) => {\n  dimension = Math.ceil(dimension);\n  const padding = BOUND_TEXT_PADDING * 2;",
+          "  containerType: ExtractSetType<typeof VALID_CONTAINER_TYPES>,\n  container?: any,\n) => {\n  dimension = Math.ceil(dimension);\n  const padding = __textPadding(container) * 2;",
+        ],
+        [resize, "computeContainerDimensionForBoundText($1, container.type, container)", 3],
+      ]);
+    }
+    if (file.endsWith("/packages/excalidraw/wysiwyg/textWysiwyg.tsx")) {
+      return patch("textWysiwyg.tsx", [[resize, "computeContainerDimensionForBoundText($1, container.type, container)", 2]]);
+    }
+    if (file.endsWith("/packages/excalidraw/components/Actions.tsx")) {
+      const control = (indent: string) =>
+        `${indent}<TextPaddingControl appState={appState} elementsMap={elementsMap as any} />`;
+      return patch("Actions.tsx", [
+        [
+          '      {predicates.opacity && renderAction("changeOpacity")}\n\n      {predicates.layers',
+          `      {predicates.opacity && renderAction("changeOpacity")}\n${control("      ")}\n\n      {predicates.layers`,
+        ],
+        [
+          '              {predicates.opacity && renderAction("changeOpacity")}\n            </div>',
+          `              {predicates.opacity && renderAction("changeOpacity")}\n${control("              ")}\n            </div>`,
+        ],
+        [/^/, `import { TextPaddingControl } from ${JSON.stringify(TEXT_PADDING_ENTRY)};\n`],
+      ]);
+    }
+    return null;
   },
 });
 
@@ -110,7 +195,7 @@ export default async (configEnv: { mode: string; command: string }) => {
 
   return {
     ...config,
-    plugins: [injectScenesPlugin(), sceneUrls(), ...(config.plugins || [])],
+    plugins: [injectScenesPlugin(), textPadding(), sceneUrls(), ...(config.plugins || [])],
     define: {
       ...config.define,
       "import.meta.env.VITE_APP_SCENES_GIT_REPO": JSON.stringify(

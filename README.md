@@ -141,26 +141,73 @@ uncommitted changes. Click it to open the **Scenes** sidebar:
   it locally (then it's kept and pushed again).
 - **Discard local changes**: reload the scene from the repo
 
-Scenes have URLs: `http://draw.test/<scene name>`. Agent drawings
-appear live in the scene `agent-live` (see README-AGENTS.md). The
+Scenes have URLs: `http://draw.test/<scene name>`. Agent edits arrive
+within seconds through the sync (see README-AGENTS.md). The
 "Try Excalidraw+" banner is hidden via `scenes-plugin/src/scenes.scss`.
+
+### Slides
+
+Every frame of a scene is a slide. **Slides** (top-left, next to the scene
+pill) opens the deck:
+
+- **Present** (or "From here" on a slide): fullscreen, editor hidden, the
+  camera glides from slide to slide. Keys: → / Space / PageDown next (also
+  the next click step), ← back, Home / End, a number + Enter jumps, G all
+  slides, L laser pointer, B black screen, Esc ends. **Presenter** opens a
+  second window with the current and next slide, speaker notes and a timer.
+- **+ Slide** adds a 16:9 frame (1920 × 1080) after the selected one; drag
+  slides in the list to reorder. Per slide: title, speaker notes, "skip when
+  presenting" (backup slides), "show template".
+- **Click steps:** select elements on a slide and pick "Click 1", "Click 2" …
+  under "Selection appears"; they fade in one click at a time.
+- **Template:** one "Template" frame holds what every slide shows: header,
+  footer, logo, background. Edit it once; every slide follows. Template
+  texts can use `{page}` `{total}` `{title}` `{deck}` `{date}`. On slides
+  the copies are locked; unlock one to change it on that slide only (it
+  then stays as you made it). **Reset to template** brings the template
+  version and the deck style back for one slide, **Reset all slides** for
+  the whole deck.
+- **Deck style:** font, title and text size, colors, sloppiness, stroke,
+  fill and transition, stored with the template. New elements use it, and
+  elements that still have the deck's values follow when you change it.
+  Anything you styled by hand on a slide stays.
+- **PDF** exports one page per slide (skipped slides left out).
+
+All of it is stored in the scene itself, so decks sync, merge and travel
+like any other scene, and agents can build them (see the skill). The scene
+"Example - Presentation" shows what is possible.
+
+### Text padding
+
+Shapes with text (rectangle, ellipse, diamond) have a **Text padding**
+slider below Opacity in the properties panel: how far the text keeps from
+the border (default 5 px), per shape.
 
 ### Sync with GitHub
 
 The browser is the source of truth and works offline (train!): scenes live in
 localStorage/IndexedDB, GitHub is a sync target. Each scene tracks the GitHub
 version it is based on, which gives a visible status:
-✓ synced · ↑ not pushed · ↓ newer on GitHub · ⇅ changed on both sides · ! conflict · ○ only local.
+✓ synced · ↑ not pushed · ↓ newer on GitHub · ⇅ changed on both sides · ! conflict · ○ not on GitHub yet · ⌂ local only.
+
+- **Local only** (per scene: "This scene: local only, never on GitHub", or
+  the "Local only" checkbox when creating one): the scene stays in this
+  browser and is never pushed or pulled. A copy that is already on GitHub
+  stays there unchanged. Switch back to auto-sync any time to publish it
+  (merged with the GitHub copy, if there is one). Agents can still read and
+  edit it through the open app.
 
 - **Auto-sync** (default on; per-scene override "always / manual only"):
   pushes after 30s without edits and when you leave the tab; pulls scenes
   without local changes; checks GitHub every 60s; downloads all scenes so
   they're available offline.
-- **Both sides changed:** an element-level three-way merge (Excalidraw
-  elements have ids + versions). Different elements merge automatically. The
-  same element changed on both sides becomes a **conflict**, and you choose
-  *Keep mine* (overwrite GitHub), *Take GitHub's*, or *Keep both* (yours
-  becomes a copy).
+- **Both sides changed:** an element-level three-way merge. Elements are
+  compared by content, so re-saved but unchanged elements don't count.
+  Different elements merge automatically. The same element changed
+  differently on both sides becomes a **conflict**, and you choose *Keep
+  mine* (overwrite GitHub), *Take GitHub's*, or *Keep both* (yours becomes a
+  copy). Or ask an agent: it sees each clashing element in both versions
+  (`get_conflict`) and can decide element by element (`resolve_conflict`).
 - **Offline:** everything keeps working. The sidebar shows "GitHub not
   reachable, working locally · N scenes waiting to sync", and syncing
   resumes when the connection is back.
@@ -181,9 +228,10 @@ server stores anything:
 - `scenes-server/.repo` is only a transport clone: it is reset to GitHub's
   state before every commit and after a failed push, so it never holds
   anything GitHub doesn't have. Delete it any time; it is re-cloned.
-- Agent data (`create_view` checkpoints, the baselines used to report user
-  changes) is kept by the app in the browser's IndexedDB. Without an open
-  tab, the hidden headless renderer holds checkpoints in a throwaway profile
+- Agents' change tracking comes from git: agent commits carry a
+  `Scenes-Source: agent` trailer, and "what did the user change" is the diff
+  to the scene as of the last agent commit. Agent drafts (`create_view`
+  checkpoints) live in the agent's headless Chrome, in a throwaway profile
   that is deleted when it stops.
 - In memory there are only live connections (which tabs are open, which
   scene each shows, pending agent commands) and the last GitHub reachability
@@ -194,28 +242,34 @@ server stores anything:
 👉 **Step-by-step guide for coding agents: [README-AGENTS.md](README-AGENTS.md)**
 
 `.mcp.json` registers the server for Claude Code in this folder
-(`node scenes-mcp/server.mjs`, stdio). Tools:
+(`node scenes-mcp/server.mjs`, stdio).
+
+**Agents have their own Excalidraw.** They read, edit and render scenes in a
+hidden headless Chrome that the scenes server starts on demand, and every
+agent edit is one commit on GitHub. Your browser is never remote-controlled:
+your app pulls agent commits within seconds and merges them into what you
+have open, and it pushes your changes of a scene when an agent asks for it.
+`SCENES_AGENT_MODE=live` in `.env` switches back to agents working directly
+in your open tab.
+
+Only the app and the MCP tools may write scenes: the scenes server refuses
+writes from anything else (e.g. an agent's own curl script) and content that
+names a different scene than the one it is saved as.
 
 | tool | |
 |---|---|
 | `read_me`, `create_view` | upstream excalidraw-mcp drawing tools (create_view returns a `checkpointId`) |
-| `list_scenes` | scenes in the repo + what the app has open |
-| `get_scene` | elements of a scene + a `checkpointId` to edit it via `create_view` + `restoreCheckpoint` |
-| `save_scene` | commit & push a drawing (`checkpointId` or `elements`), `open=true` switches the app to it |
-| `open_scene` | switch the open app to a scene (`create=true` for a new empty one) |
-| `rename_scene` / `clone_scene` / `delete_scene` | rename, duplicate or delete a scene, in the app and on GitHub (directly on GitHub if no app is open) |
-| `app_status` | open scene, dirty flag, local-only scenes |
-| `save_open_scene` | commit the scene open in the app, incl. the user's manual edits |
+| `read_scene` | a scene + what the user changed since the agent's last edit (`userChanges`), with a `revision` |
+| `edit_scene` | add / update / delete elements, committed right away; the user's app merges it |
+| `view_scene` | PNG image of a scene or a draft, optionally zoomed |
+| `list_scenes` / `get_scene` | scenes on GitHub, and a scene as data |
+| `save_scene` | commit a NEW drawing (`checkpointId` or `elements`); existing scenes only with `replace=true` |
+| `rename_scene` / `clone_scene` / `delete_scene` | on GitHub; the user's app follows |
+| `app_status` / `open_scene` | what the user's app shows and each scene's sync status; switch it to a scene (only on request) |
+| `get_conflict` / `resolve_conflict` | show a merge conflict (each clashing element in both versions, plus images) and resolve it element by element, or wholesale |
 
-Typical flow: `read_me` → `create_view` → `save_scene(name, checkpointId, open: true)`.
-
-Elements in the short create_view format (`label`, `startBinding`, …) are
-converted by the open browser tab with real font metrics (same conversion as
-the excalidraw-mcp widget, plus arrow bindings); without an open tab a Node
-fallback estimates text sizes. If the app has the scene open without local
-changes, it reloads automatically after an agent commits; with local changes
-the user gets a notice instead. With several tabs, agent commands go to the
-most recently focused one.
+Typical flows: new drawing `read_me` → `create_view` → `save_scene`;
+changing a scene `read_scene` → `edit_scene(basedOn: revision)`.
 
 ## Updating upstream
 

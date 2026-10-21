@@ -24,8 +24,18 @@ export type SceneMeta = {
   dirty: boolean;
   /** per-scene override of the global auto-sync switch */
   autoSync?: boolean;
+  /**
+   * kept only in this browser: never pushed or pulled (a copy that is on
+   * GitHub already stays there unchanged); syncing can be turned on later
+   */
+  localOnly?: boolean;
   /** both sides changed the same elements — waits for the user */
-  conflict?: { remoteSha: string; clashes: string[] };
+  conflict?: {
+    remoteSha: string;
+    clashes: string[];
+    /** merge algorithm that found it (older ones are re-checked) */
+    v?: number;
+  };
   /** pre-sync-engine metadata, resolved on the first remote listing */
   legacy?: boolean;
   /** renamed locally, the rename on GitHub is still pending (old name) */

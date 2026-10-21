@@ -243,6 +243,38 @@ const readScene = async (name, sha) => {
 };
 
 /**
+ * The version of a scene an agent committed last (blob sha), read from the
+ * git history — agents' change tracking needs no state anywhere else.
+ */
+const lastAgentVersion = async (name) => {
+  const file = scenePath(name);
+  if (!(await hasRemoteBranch())) {
+    return null;
+  }
+  // --follow (the scene may have been renamed since) doesn't combine with
+  // --grep, so scan the scene's recent history; --name-only gives its file
+  // name as of each commit
+  const log = await git(
+    ["log", "-n", "300", "--follow", "--name-only", "--format=%x01%H%x00%cI%x00%(trailers:key=Scenes-Source,valueonly)", REMOTE_REF, "--", file],
+    { allowFail: true },
+  );
+  const entries = log.stdout.split("\x01").filter(Boolean).map((entry) => {
+    const [head, ...rest] = entry.split("\n");
+    const [commit, at, source] = head.split("\0");
+    const names = [source, ...rest].join("\n").split("\n").map((line) => line.trim()).filter(Boolean);
+    return { commit, at, agent: (source || "").trim() === "agent", oldFile: names.find((n) => n.startsWith(`${SCENES_SUBDIR}/`)) };
+  });
+  const hit = entries.find((entry) => entry.agent);
+  if (!hit) {
+    return null;
+  }
+  const { commit, at } = hit;
+  const oldFile = hit.oldFile || file;
+  const blob = await git(["rev-parse", `${commit}:${oldFile}`], { allowFail: true });
+  return blob.ok ? { sha: blob.stdout.trim(), commit, at } : null;
+};
+
+/**
  * One commit on top of the latest remote state, pushed right away. The local
  * clone is only a transport: it is reset to GitHub's state before every
  * commit and after every failed push, so it never holds anything GitHub
@@ -323,18 +355,35 @@ const checkBase = (name, current, baseSha) => {
  *          <sha>     = the version the caller's copy is based on — if GitHub
  *                      has something else, 409 (the caller has to merge).
  */
-const saveScene = async (name, content, baseSha) => {
+const AGENT_TRAILER = "Scenes-Source: agent";
+const isAgent = (source) => typeof source === "string" && source.startsWith("agent");
+
+/** commit message; agent commits carry a trailer, so their versions can be found again */
+const commitMessage = (text, source) =>
+  isAgent(source) ? `Agent: ${text[0].toLowerCase()}${text.slice(1)}\n\n${AGENT_TRAILER}` : text;
+
+const saveScene = async (name, content, baseSha, source) => {
   scenePath(name);
+  let data;
   try {
-    JSON.parse(content);
+    data = JSON.parse(content);
   } catch {
     throw httpError(400, "Scene content is not valid JSON");
+  }
+  // the content names the scene it belongs to (appState.name): a stale tab or
+  // a confused writer must not put one scene's drawing under another's name
+  const owner = data?.appState?.name;
+  if (typeof owner === "string" && owner !== name) {
+    throw httpError(
+      422, // not 409: that means "GitHub has a newer version" to the app
+      `Refused: this content belongs to scene "${owner}", not "${name}". Nothing was written.`,
+    );
   }
   return commitToRemote((blobs) => {
     const current = blobs.get(name);
     checkBase(name, current, baseSha);
     return {
-      message: `${current ? "Update" : "Add"} scene: ${name}`,
+      message: commitMessage(`${current ? "Update" : "Add"} scene: ${name}`, source),
       write: { [name]: content },
       result: (after) => ({ sha: after.get(name) ?? null }),
     };
@@ -487,8 +536,18 @@ const waitFor = async (predicate, timeoutMs) => {
   return false;
 };
 
-const ensureRenderer = async () => {
-  if (activeTabId({ allowRenderer: true })) {
+/** dedicated: the agent's own headless tab is needed even if user tabs are open */
+const rendererTab = () => {
+  for (const [tabId, client] of clients) {
+    if (client.role === "renderer") {
+      return tabId;
+    }
+  }
+  return null;
+};
+
+const ensureRenderer = async ({ dedicated = false } = {}) => {
+  if (dedicated ? rendererTab() : activeTabId({ allowRenderer: true })) {
     return;
   }
   if (!renderer) {
@@ -521,7 +580,10 @@ const ensureRenderer = async () => {
       rmSync(profile, { recursive: true, force: true });
     });
   }
-  const ok = await waitFor(() => activeTabId({ allowRenderer: true }), 30000);
+  const ok = await waitFor(
+    () => (dedicated ? rendererTab() : activeTabId({ allowRenderer: true })),
+    30000,
+  );
   if (!ok) {
     const error = new Error(
       `Headless renderer did not connect — is the app running at ${APP_URL}?`,
@@ -547,6 +609,11 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 /** run a command in the active app tab (render/convert: any tab, or a headless one) */
 const sendCommand = async (command) => {
+  // agentSide: the agent's own Excalidraw (headless), never the user's tabs
+  if (command?.agentSide) {
+    await ensureRenderer({ dedicated: true });
+    return sendCommandTo(rendererTab(), command);
+  }
   const allowRenderer = RENDERER_COMMANDS.has(command?.type);
   if (allowRenderer) {
     await ensureRenderer();
@@ -562,6 +629,10 @@ const sendCommand = async (command) => {
     error.status = 409;
     throw error;
   }
+  return sendCommandTo(tab, command);
+};
+
+const sendCommandTo = (tab, command, timeoutMs = COMMAND_TIMEOUT_MS) => {
   const id = String(++commandSeq);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -569,7 +640,7 @@ const sendCommand = async (command) => {
       const error = new Error("The Excalidraw app did not answer in time");
       error.status = 504;
       reject(error);
-    }, COMMAND_TIMEOUT_MS);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     clients
       .get(tab)
@@ -621,7 +692,7 @@ const send = (res, status, body, type = "application/json") => {
     "Content-Type": type,
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, X-Scenes-Source, X-Base-Sha",
+    "Access-Control-Allow-Headers": "Content-Type, X-Scenes-Source, X-Scenes-Client, X-Base-Sha",
     "Access-Control-Expose-Headers": "X-Scene-Sha",
   });
   res.end(typeof body === "string" ? body : JSON.stringify(body));
@@ -667,6 +738,25 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 200, appState());
     }
+    if (url.pathname === "/api/app/flush" && req.method === "POST") {
+      // before an agent reads/edits a scene: the user's tabs push their
+      // unpushed changes of it (sync only — nothing in the user's UI changes)
+      const { name } = await readJson(req);
+      const showing = [...clients.entries()]
+        .filter(([tabId, client]) => client.role !== "renderer" && tabStates.get(tabId)?.current === name)
+        .map(([tabId]) => tabId);
+      // tabs of one browser share their stored scenes: one tab is enough for the rest
+      const targets = showing.length ? showing : [activeTabId()].filter(Boolean);
+      const results = [];
+      for (const tabId of targets) {
+        try {
+          results.push(await sendCommandTo(tabId, { type: "flush", name }, 15000));
+        } catch (error) {
+          results.push({ error: error.message });
+        }
+      }
+      return send(res, 200, { tabs: targets.length, results });
+    }
     if (url.pathname === "/api/app/command" && req.method === "POST") {
       const command = await readJson(req);
       const result = await sendCommand(command);
@@ -691,6 +781,24 @@ const server = http.createServer(async (req, res) => {
       const result = await serialized(() => renameScene(from, String(to ?? "").trim()));
       broadcast({ type: "scene-renamed", from, to, sha: result.sha, source: req.headers["x-scenes-source"] || "app" });
       return send(res, 200, { from, to, ...result });
+    }
+    // scenes are written only by the app and the MCP tools — never by
+    // scripts calling this API directly (that bypasses merging, change
+    // tracking and the user's unpushed work)
+    if (
+      url.pathname.startsWith("/api/scenes/") &&
+      ["PUT", "POST", "DELETE"].includes(req.method) &&
+      !["app", "mcp"].includes(String(req.headers["x-scenes-client"] || ""))
+    ) {
+      return send(res, 403, {
+        error:
+          "Direct writes to the scenes server are not allowed. Agents: change scenes only with the Excalidraw MCP tools (read_scene / edit_scene, save_scene for new scenes); the app syncs everything with GitHub. If you don't have these tools, your MCP server is outdated: ask the user to restart your session.",
+      });
+    }
+    const agentMatch = url.pathname.match(/^\/api\/scenes\/(.+)\/agent-version$/);
+    if (agentMatch && req.method === "GET") {
+      const name = decodeURIComponent(agentMatch[1]);
+      return send(res, 200, { name, version: await serialized(() => lastAgentVersion(name)) });
     }
     const match = url.pathname.match(/^\/api\/scenes\/(.+)$/);
     if (match) {
@@ -720,7 +828,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === "PUT") {
         const content = await readBody(req);
-        const result = await serialized(() => saveScene(name, content, baseSha));
+        const result = await serialized(() =>
+          saveScene(name, content, baseSha, req.headers["x-scenes-source"]),
+        );
         broadcast({
           type: "scene-saved",
           name,

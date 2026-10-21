@@ -2,6 +2,7 @@
 // agents can look at scenes without any browser automation.
 
 import {
+  Fonts,
   exportToBlob,
   elementsOverlappingBBox,
   getCommonBounds,
@@ -134,6 +135,9 @@ export const renderScene = async (
 
   const maxSize = Math.min(4000, Math.max(200, command.maxSize ?? 1500));
   let scale = 1;
+  // the scene's fonts (and the characters used) must be loaded, or the
+  // image shows fallback fonts the user's browser doesn't
+  await Fonts.loadElementsFonts(shown).catch(() => []);
   const blob = await exportToBlob({
     elements: shown,
     files,

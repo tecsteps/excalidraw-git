@@ -5,12 +5,19 @@
 import {
   CaptureUpdateAction,
   newElementWith,
+  Fonts,
   restoreElements,
+  serializeAsJSON,
 } from "@excalidraw/excalidraw";
 
-import { scenesController } from "./controller";
-import { getAgentBaseline, setAgentBaseline, setCheckpoint } from "./storage";
+import { hashString } from "@excalidraw/element";
 
+import { scenesApi } from "./api";
+import { scenesController, withSceneName } from "./controller";
+import { getAgentBaseline, getCheckpoint, setAgentBaseline, setCheckpoint } from "./storage";
+
+import type { ApiError } from "./api";
+import type { BinaryFiles } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
 /**
@@ -31,6 +38,17 @@ type BaselineOptions = {
 
 export type ReadCommand = { type: "read" } & BaselineOptions;
 
+/** detached mode: the agent edits its own copy of a scene and commits it */
+export type SceneEditCommand = {
+  type: "scene-edit";
+  name: string;
+  /** image files of added image elements */
+  files?: BinaryFiles;
+  add?: any[];
+  update?: Array<{ id: string; [key: string]: unknown }>;
+  delete?: string[];
+};
+
 export type EditCommand = {
   type: "edit";
   /** refuse to edit if the user switched to another scene meanwhile */
@@ -41,6 +59,8 @@ export type EditCommand = {
   update?: Array<{ id: string; [key: string]: unknown }>;
   /** ids to delete (labels of deleted containers go too) */
   delete?: string[];
+  /** image files of added image elements */
+  files?: BinaryFiles;
 } & BaselineOptions;
 
 const requireApi = () => {
@@ -53,7 +73,12 @@ const requireApi = () => {
 
 const sceneInfo = () => {
   const { current, dirty } = scenesController.getState();
-  return { scene: current, dirty, autoSync: scenesController.autoSyncFor(current) };
+  return {
+    scene: current,
+    dirty,
+    autoSync: scenesController.autoSyncFor(current),
+    syncStatus: scenesController.statusOf(current),
+  };
 };
 
 const handleBaseline = async (
@@ -93,21 +118,17 @@ export const readOpenScene = async (command: ReadCommand = { type: "read" }) => 
 /** fields an agent must not set directly */
 const PROTECTED = new Set(["id", "type", "version", "versionNonce", "isDeleted", "index"]);
 
-export const editOpenScene = async (
-  command: EditCommand,
+/**
+ * Apply an agent's add / update / delete to a list of elements (incl. deleted
+ * ones) — used for the user's open canvas (live mode) and for the agent's own
+ * headless copy (detached mode).
+ */
+const applyEdits = async (
+  input: readonly ExcalidrawElement[],
+  command: Pick<EditCommand, "add" | "update" | "delete">,
   convert: (elements: any[]) => Promise<any[]>,
 ) => {
-  const api = requireApi();
-  const { scene } = sceneInfo();
-  if (command.expectScene !== undefined && command.expectScene !== scene) {
-    throw new Error(
-      `The user switched scenes: the app now shows ${
-        scene === null ? "Untitled" : `"${scene}"`
-      }, not "${command.expectScene}". Read the open scene again.`,
-    );
-  }
-
-  let elements: ExcalidrawElement[] = [...api.getSceneElementsIncludingDeleted()];
+  let elements: ExcalidrawElement[] = [...input];
   const byId = () => new Map(elements.map((el) => [el.id, el]));
   const missing: string[] = [];
 
@@ -153,8 +174,10 @@ export const editOpenScene = async (
       const patch = patches.get(el.id);
       return patch ? newElementWith(el, patch as any) : el;
     });
-    // re-measure edited text
+    // re-measure edited text, with its font loaded (else a fallback font is
+    // measured and the text is cut off in the user's browser)
     if (textUpdated.size) {
+      await Fonts.loadElementsFonts(elements.filter((el) => textUpdated.has(el.id))).catch(() => []);
       const refreshed = new Map(
         restoreElements(
           elements.filter((el) => textUpdated.has(el.id)),
@@ -210,6 +233,38 @@ export const editOpenScene = async (
     ].map((el) => mergedById.get(el.id) ?? el);
   }
 
+  return {
+    elements,
+    addedIds,
+    updated: (command.update || []).map((u) => u.id).filter((id) => !missing.includes(id)),
+    deleted: (command.delete || []).filter((id) => !missing.includes(id)),
+    ...(missing.length ? { missingIds: missing } : {}),
+  };
+};
+
+export const editOpenScene = async (
+  command: EditCommand,
+  convert: (elements: any[]) => Promise<any[]>,
+) => {
+  const api = requireApi();
+  const { scene } = sceneInfo();
+  if (command.expectScene !== undefined && command.expectScene !== scene) {
+    throw new Error(
+      `The user switched scenes: the app now shows ${
+        scene === null ? "Untitled" : `"${scene}"`
+      }, not "${command.expectScene}". Read the open scene again.`,
+    );
+  }
+
+  if (command.files && Object.keys(command.files).length) {
+    api.addFiles(Object.values(command.files));
+  }
+  const { elements, ...edit } = await applyEdits(
+    api.getSceneElementsIncludingDeleted(),
+    command,
+    convert,
+  );
+
   api.updateScene({
     elements,
     captureUpdate: CaptureUpdateAction.IMMEDIATELY, // user can undo agent edits
@@ -220,10 +275,123 @@ export const editOpenScene = async (
   return {
     ...sceneInfo(),
     ...(await handleBaseline(scene, after, command)),
-    addedIds,
-    updated: (command.update || []).map((u) => u.id).filter((id) => !missing.includes(id)),
-    deleted: (command.delete || []).filter((id) => !missing.includes(id)),
-    ...(missing.length ? { missingIds: missing } : {}),
+    ...edit,
     elements: after,
   };
+};
+
+/**
+ * Detached mode, in the agent's headless tab: apply the edit to the newest
+ * version on GitHub and commit it (the user's app merges it within seconds).
+ * If GitHub moved on meanwhile, the edit is simply applied again on top.
+ */
+export const editSceneOnGitHub = async (
+  command: SceneEditCommand,
+  convert: (elements: any[]) => Promise<any[]>,
+) => {
+  for (let attempt = 1; ; attempt++) {
+    const latest = await scenesApi.load(command.name);
+    const data = JSON.parse(latest.json);
+    const edit = await applyEdits(
+      restoreElements(data.elements || [], null, { repairBindings: true }),
+      command,
+      convert,
+    );
+    const elements = edit.elements.filter((el) => !el.isDeleted);
+    const json = withSceneName(
+      serializeAsJSON(elements, data.appState || {}, { ...(data.files || {}), ...(command.files || {}) }, "local"),
+      command.name, // ties the content to this scene
+    );
+    try {
+      const saved = await scenesApi.save(command.name, json, latest.sha, "agent");
+      return { ...edit, elements, sha: saved.sha, commit: saved.commit, changed: saved.changed };
+    } catch (error) {
+      if ((error as ApiError).status !== 409 || attempt >= 3) {
+        throw error;
+      }
+    }
+  }
+};
+
+// -----------------------------------------------------------------------------
+// local-only scenes: they exist only in the user's browser (never on GitHub),
+// so the agent reads and edits them through the user's tab. Revisions and the
+// agent's last version are kept here too.
+// -----------------------------------------------------------------------------
+
+export type LocalSceneCommand =
+  | { type: "local-read"; name: string; since?: string }
+  | ({ type: "local-edit"; name: string } & Pick<EditCommand, "add" | "update" | "delete" | "files">)
+  | { type: "local-save"; name: string; json: string; replace?: boolean; open?: boolean };
+
+const revisionKey = (name: string, revision: string) => `local:${name}:${revision}`;
+
+/** a revision id for this content, remembered so `since` can refer to it */
+const rememberRevision = async (name: string, elements: readonly unknown[], json: string) => {
+  const revision = `local-${(hashString(json) >>> 0).toString(36)}`;
+  await setCheckpoint(revisionKey(name, revision), { elements: [...elements] });
+  return revision;
+};
+
+const parseScene = (json: string) => {
+  const data = JSON.parse(json);
+  return {
+    elements: (data.elements || []).filter((el: any) => !el.isDeleted),
+    files: data.files || {},
+    appState: data.appState || {},
+  };
+};
+
+export const readLocalScene = async ({ name, since }: { name: string; since?: string }) => {
+  const json = await scenesController.localOnlyJson(name);
+  const file = parseScene(json);
+  const revision = await rememberRevision(name, file.elements, json);
+  let base: { elements: unknown[]; label: string } | null = null;
+  if (since) {
+    const stored = (await getCheckpoint(revisionKey(name, since))) as { elements: unknown[] } | null;
+    if (!stored) {
+      throw new Error(`Revision "${since}" of "${name}" not found — call without since/basedOn`);
+    }
+    base = { elements: stored.elements, label: `since revision ${since}` };
+  } else {
+    const last = await getAgentBaseline(name);
+    if (last) {
+      base = { elements: last.elements, label: `since an agent last edited this scene (${last.at})` };
+    }
+  }
+  return { file, revision, base };
+};
+
+export const editLocalScene = async (
+  command: Extract<LocalSceneCommand, { type: "local-edit" }>,
+  convert: (elements: any[]) => Promise<any[]>,
+) => {
+  const data = JSON.parse(await scenesController.localOnlyJson(command.name));
+  const edit = await applyEdits(
+    restoreElements(data.elements || [], null, { repairBindings: true }),
+    command,
+    convert,
+  );
+  const elements = edit.elements.filter((el) => !el.isDeleted);
+  const files = { ...(data.files || {}), ...(command.files || {}) };
+  const json = withSceneName(serializeAsJSON(elements, data.appState || {}, files, "local"), command.name);
+  await scenesController.writeLocalOnly(command.name, json);
+  await setAgentBaseline(command.name, { at: new Date().toISOString(), action: "edit", elements });
+  return {
+    ...edit,
+    elements,
+    files,
+    appState: data.appState || {},
+    revision: await rememberRevision(command.name, elements, json),
+  };
+};
+
+export const saveLocalScene = async ({ name, json, replace, open }: Extract<LocalSceneCommand, { type: "local-save" }>) => {
+  await scenesController.createLocalOnly(name, json, { replace: !!replace });
+  const file = parseScene(json);
+  await setAgentBaseline(name, { at: new Date().toISOString(), action: "save", elements: file.elements });
+  if (open) {
+    await scenesController.open(name);
+  }
+  return { saved: name, localOnly: true, revision: await rememberRevision(name, file.elements, json) };
 };

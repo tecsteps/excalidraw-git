@@ -1,7 +1,179 @@
 .excalidraw {
-  .scenes-pill {
-    // render after the main menu button (renderTopLeftUI is placed before it)
+  // pill + quick-switch dropdown (render after the main menu button)
+  .scenes-switcher {
     order: 1;
+    position: relative;
+    display: flex;
+    gap: 0.5rem;
+    pointer-events: all;
+  }
+
+  .scenes-slides-btn {
+    flex: none;
+  }
+
+  .scenes-pill__caret {
+    margin-left: -0.1rem;
+    color: var(--color-gray-50);
+    font-size: 0.7rem;
+  }
+
+  .scenes-pill--open {
+    background: var(--button-hover-bg, var(--color-surface-high));
+  }
+
+  .scenes-switcher__menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    width: 17rem;
+    max-width: calc(100vw - 2rem);
+    padding: 0.4rem;
+    border: 1px solid var(--default-border-color);
+    border-radius: var(--border-radius-lg, 8px);
+    background: var(--island-bg-color);
+    box-shadow: var(--shadow-island);
+  }
+
+  .scenes-switcher__filter {
+    position: relative;
+    margin-bottom: 0.3rem;
+
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 0.45rem 2rem 0.45rem 0.6rem;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--border-radius-md, 6px);
+      background: var(--input-bg-color, transparent);
+      color: var(--text-primary-color);
+      font: inherit;
+      font-size: 0.875rem;
+      outline: none;
+
+      &:focus {
+        border-color: var(--color-primary);
+      }
+    }
+  }
+
+  .scenes-switcher__clear,
+  .scenes-filter-chip button {
+    display: grid;
+    place-items: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--color-surface-high, rgba(0, 0, 0, 0.08));
+    color: var(--color-gray-60, var(--text-primary-color));
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--color-primary-light, rgba(105, 101, 219, 0.2));
+      color: var(--color-primary);
+    }
+  }
+
+  .scenes-switcher__clear {
+    position: absolute;
+    top: 50%;
+    right: 0.45rem;
+    transform: translateY(-50%);
+  }
+
+  .scenes-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.15rem 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--color-surface-high, rgba(0, 0, 0, 0.06));
+    color: var(--color-gray-60, var(--text-primary-color));
+    font-size: 0.75rem;
+    text-transform: none;
+    letter-spacing: normal;
+
+    button {
+      width: 1.1rem;
+      height: 1.1rem;
+      font-size: 0.8rem;
+    }
+  }
+
+  .scenes-switcher__list {
+    display: flex;
+    flex-direction: column;
+    max-height: min(22rem, 60vh);
+    overflow-y: auto;
+  }
+
+  .scenes-switcher__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.1rem;
+    padding: 0.3rem 0.6rem;
+    border: none;
+    border-radius: var(--border-radius-md, 6px);
+    background: none;
+    color: var(--text-primary-color);
+    font: inherit;
+    font-size: 0.875rem;
+    text-align: left;
+    cursor: pointer;
+
+    &--active {
+      background: var(--button-hover-bg, var(--color-surface-high));
+    }
+
+    &--current {
+      font-weight: 600;
+      color: var(--color-primary);
+    }
+
+    &--create {
+      color: var(--color-primary);
+    }
+  }
+
+  .scenes-switcher__name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scenes-switcher__empty {
+    padding: 0.5rem 0.6rem;
+    color: var(--color-gray-50);
+    font-size: 0.8rem;
+  }
+
+  .scenes-switcher__manage {
+    margin-top: 0.3rem;
+    padding: 0.5rem 0.6rem;
+    border: none;
+    border-top: 1px solid var(--default-border-color);
+    background: none;
+    color: var(--color-gray-60, var(--text-primary-color));
+    font: inherit;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--color-primary);
+    }
+  }
+
+  .scenes-pill {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -164,6 +336,15 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+  }
+
+  .scenes-form__check {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--color-gray-70, inherit);
+    cursor: pointer;
   }
 
   .scenes-input {

@@ -75,13 +75,16 @@ export const scenesApi = {
     name: string,
     json: string,
     baseSha: string,
+    /** who saves: this tab (default) or "agent" (the agent's headless tab) */
+    source = `app:${TAB_ID}`,
   ): Promise<{ sha: string; commit: string | null; changed: boolean }> =>
     (
       await request(scenePath(name), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          "X-Scenes-Source": `app:${TAB_ID}`,
+          "X-Scenes-Source": source,
+          "X-Scenes-Client": "app",
           "X-Base-Sha": baseSha,
         },
         body: json,
@@ -94,6 +97,7 @@ export const scenesApi = {
         method: "DELETE",
         headers: {
           "X-Scenes-Source": `app:${TAB_ID}`,
+          "X-Scenes-Client": "app",
           ...(baseSha ? { "X-Base-Sha": baseSha } : {}),
         },
       })
@@ -103,7 +107,7 @@ export const scenesApi = {
     (
       await request(`${scenePath(from)}/rename`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Scenes-Source": `app:${TAB_ID}` },
+        headers: { "Content-Type": "application/json", "X-Scenes-Source": `app:${TAB_ID}`, "X-Scenes-Client": "app" },
         body: JSON.stringify({ to }),
       })
     ).json(),

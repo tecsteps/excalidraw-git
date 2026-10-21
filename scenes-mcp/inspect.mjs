@@ -66,10 +66,9 @@ export const byIds = (elements, ids) => {
   );
 };
 
-const MAX_TEXTS = 400;
-
-/** overview of a scene: where things are, without dumping every element */
-export const summarize = (elements) => {
+/** overview of a scene: where things are, without dumping every element.
+ * Text labels are paged (textsOffset / textsLimit) so huge scenes stay small. */
+export const summarize = (elements, { textsOffset = 0, textsLimit = 100 } = {}) => {
   const byId = new Map(elements.map((el) => [el.id, el]));
   const countsByType = {};
   for (const el of elements) {
@@ -98,12 +97,21 @@ export const summarize = (elements) => {
     sceneBounds: toRect(commonBounds(elements)),
     countsByType,
     ...(frames.length ? { frames } : {}),
-    texts: texts.slice(0, MAX_TEXTS),
-    ...(texts.length > MAX_TEXTS ? { textsTruncated: texts.length - MAX_TEXTS } : {}),
+    textCount: texts.length,
+    texts: texts.slice(textsOffset, textsOffset + textsLimit),
+    ...(texts.length > textsOffset + textsLimit
+      ? { moreTexts: `${texts.length - textsOffset - textsLimit} more labels: call again with textsOffset=${textsOffset + textsLimit}, or narrow down with region` }
+      : {}),
   };
 };
 
 const VOLATILE = new Set(["version", "versionNonce", "updated", "seed", "index"]);
+
+/** null, missing and [] mean the same (the app and agents differ in which they write) */
+const comparable = (value) =>
+  value === null || value === undefined || (Array.isArray(value) && !value.length)
+    ? null
+    : JSON.stringify(value);
 
 /**
  * What changed between two snapshots of a scene (non-deleted elements):
@@ -124,7 +132,7 @@ export const diffElements = (before, after) => {
       continue;
     }
     const changedFields = Object.keys({ ...old, ...el }).filter(
-      (key) => !VOLATILE.has(key) && JSON.stringify(old[key]) !== JSON.stringify(el[key]),
+      (key) => !VOLATILE.has(key) && comparable(old[key]) !== comparable(el[key]),
     );
     if (changedFields.length) {
       modified.push({ element: el, changedFields });
