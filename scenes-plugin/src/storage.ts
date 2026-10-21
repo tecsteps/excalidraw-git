@@ -51,6 +51,10 @@ export type ScenesMeta = {
   baseline: number | null;
   /** global auto-sync switch (default on) */
   autoSync: boolean;
+  /** new scenes start local only (default on) */
+  newLocalOnly?: boolean;
+  /** same element changed on both sides: newest edit wins (default) or ask */
+  clashes?: "newest" | "ask";
   scenes: Record<string, SceneMeta>;
   /**
    * deleted locally, the delete on GitHub is still pending (offline):

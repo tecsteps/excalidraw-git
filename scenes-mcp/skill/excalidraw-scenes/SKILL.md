@@ -163,7 +163,9 @@ user picks this per scene; `app_status` / `list_scenes` mark them.
 
 ## Merge conflicts
 
-If the user's local version and GitHub's version changed the **same
+By default the user's app settles clashes by itself (the same element
+changed on both sides: the newer edit wins), so conflicts are rare. If the
+user switched that off and the local and GitHub versions changed the **same
 elements** differently, the scene is in **conflict** in the user's app
 (shown in its sidebar, in `app_status` and in `read_scene`'s `sync`). Their
 newest edits of that scene don't reach GitHub until it is resolved. Changes

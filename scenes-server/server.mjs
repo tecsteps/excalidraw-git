@@ -855,6 +855,63 @@ const server = http.createServer(async (req, res) => {
 });
 
 // never block startup on the network: work from the existing clone / offline
+// -----------------------------------------------------------------------------
+// watching GitHub: other people's (and other machines') pushes reach the open
+// tabs within seconds. While a user tab is connected, the server fetches
+// every few seconds and announces the scenes that changed, so the app syncs
+// right away instead of waiting for its own slower poll.
+// -----------------------------------------------------------------------------
+
+const WATCH_INTERVAL_MS = Number(env.SCENES_WATCH_INTERVAL_MS || 10000);
+let watchedHead = null;
+
+const remoteHead = async () =>
+  (await git(["rev-parse", "--verify", "--quiet", REMOTE_REF], { allowFail: true })).stdout || null;
+
+const sceneOf = (file) =>
+  file.startsWith(`${SCENES_SUBDIR}/`) && file.endsWith(EXTENSION) ? path.basename(file, EXTENSION) : null;
+
+const watchRemote = async () => {
+  if (!userTabCount()) {
+    return;
+  }
+  const events = await serialized(async () => {
+    const before = watchedHead ?? (await remoteHead());
+    lastFetch = Date.now();
+    if (!(await fetchRemote())) {
+      return [];
+    }
+    const after = await remoteHead();
+    watchedHead = after;
+    if (!before || !after || before === after) {
+      return [];
+    }
+    const diff = await git(["diff", "-z", "--name-status", "-M", before, after, "--", `${SCENES_SUBDIR}/`], {
+      allowFail: true,
+    });
+    const parts = diff.stdout.split("\0").filter(Boolean);
+    const found = [];
+    for (let i = 0; i < parts.length; ) {
+      const status = parts[i++];
+      if (status.startsWith("R")) {
+        const [from, to] = [sceneOf(parts[i++]), sceneOf(parts[i++])];
+        if (from && to) {
+          found.push({ type: "scene-renamed", from, to, sha: null, source: "remote" });
+        }
+      } else {
+        const name = sceneOf(parts[i++]);
+        if (name) {
+          found.push({ type: status === "D" ? "scene-deleted" : "scene-saved", name, source: "remote" });
+        }
+      }
+    }
+    return found;
+  });
+  events.forEach(broadcast);
+};
+
+setInterval(() => watchRemote().catch(() => {}), WATCH_INTERVAL_MS);
+
 serialized(() => fetchRemote()).then((ok) =>
   console.log(ok ? "GitHub reachable" : `GitHub not reachable: ${remoteState.lastError}`),
 );

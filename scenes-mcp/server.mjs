@@ -466,7 +466,7 @@ Always returns a checkpointId of the FULL scene. To modify the scene, call creat
       return `CONFLICT: the user's version and GitHub's both changed the same elements. Nothing syncs until it is resolved — get_conflict("${scene}") shows the clashes, resolve_conflict settles them.`;
     }
     return autoSync
-      ? `status: ${syncStatus}. Auto-sync is on: the app pushes changes (yours and the user's) to GitHub by itself about 30 s after the last edit. Don't push yourself.`
+      ? `status: ${syncStatus}. Auto-sync is on: the app pushes changes (yours and the user's) to GitHub by itself about 10 s after the last edit. Don't push yourself.`
       : `status: ${syncStatus}. Auto-sync is OFF for this scene: the user decides when it goes to GitHub. Don't push unless the user asks.`;
   };
 
@@ -610,7 +610,7 @@ Always returns a checkpointId of the FULL scene. To modify the scene, call creat
     server.registerTool(
       "edit_open_scene",
       {
-        description: `Edit the scene open in the user's app, live and in place — merged with the user's own work (never overwrites their other changes) and undoable by the user as one step (Cmd/Ctrl+Z). This is THE way to co-work on a drawing with the user, and to change any existing scene. It does not push to GitHub and you don't need to: the app's auto-sync pushes about 30 s after the last edit (save_open_scene only when the user asks to push now).
+        description: `Edit the scene open in the user's app, live and in place — merged with the user's own work (never overwrites their other changes) and undoable by the user as one step (Cmd/Ctrl+Z). This is THE way to co-work on a drawing with the user, and to change any existing scene. It does not push to GitHub and you don't need to: the app's auto-sync pushes about 10 s after the last edit (save_open_scene only when the user asks to push now).
   Safety net: before applying, it checks whether the USER changed the scene since an agent last read/edited it. If so, your edit is still applied, but the result starts with a WARNING listing the user's changes (plus an image of them) — look at them and adjust if your edit conflicts with what the user did. Calling read_open_scene first avoids surprises.
   - add: JSON array string of new elements in create_view format (labels, startBinding/endBinding — arrows may bind to existing elements). Use new unique ids.
   - update: [{ "id": "...", ...props }] partial updates of existing elements, e.g. move (x, y), resize, recolor, change "text" of a text element (labels are text elements with containerId).
@@ -678,7 +678,7 @@ Returns an IMAGE of the edited area (view=false to skip). Nothing is applied if 
             info.scene === null
               ? "Live in the user's app. The scene is untitled — it reaches GitHub once it gets a name (save_open_scene with name)."
               : info.autoSync
-              ? "Live in the user's app, not pushed yet — the app's auto-sync pushes it after 30s without edits (save_open_scene pushes now)."
+              ? "Live in the user's app, not pushed yet — the app's auto-sync pushes it after 10s without edits (save_open_scene pushes now)."
               : "Live in the user's app. Auto-sync is OFF for this scene — it is only pushed when the user saves or you call save_open_scene.",
         });
         if (view) {
@@ -1017,7 +1017,9 @@ ${MODE === "live" ? 'Note: while you draw, every create_view call is mirrored li
       if (!checkpointId && !elements) {
         throw new Error("Provide checkpointId, elements or elementsFile");
       }
-      if (isLocalOnly(await flushUser(name)) && !local) {
+      const flushed = await flushUser(name);
+      const emptyLocal = (flushed?.results || []).some((r) => r && r.localOnly && r.empty);
+      if (isLocalOnly(flushed) && !local && !emptyLocal) {
         throw new Error(
           `"${name}" exists as a local-only scene in the user's browser. Change it with read_scene + edit_scene; replace it with save_scene(local: true, replace: true) only if the user wants the whole scene replaced.`,
         );
@@ -1246,7 +1248,7 @@ ${MODE === "live" ? 'Note: while you draw, every create_view call is mirrored li
       "save_open_scene",
       {
         description:
-          "Push the scene open in the user's app to GitHub right now, including the user's edits. Usually NOT needed: with auto-sync on (the default) the app pushes by itself about 30 s after the last edit and pulls GitHub changes every 60 s. Use it only when the user asks to save/commit/push now, or to give an untitled scene a name. If auto-sync is off for the scene, the user wants to decide when it goes to GitHub: only push when they ask.",
+          "Push the scene open in the user's app to GitHub right now, including the user's edits. Usually NOT needed: with auto-sync on (the default) the app pushes by itself about 10 s after the last edit and pulls GitHub changes within about 10 s. Use it only when the user asks to save/commit/push now, or to give an untitled scene a name. If auto-sync is off for the scene, the user wants to decide when it goes to GitHub: only push when they ask.",
         inputSchema: { name: SCENE_NAME.optional() },
       },
       tool(async ({ name }) => text(await appCommand({ type: "save", ...(name ? { name } : {}) }))),

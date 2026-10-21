@@ -302,7 +302,7 @@ const status = () => {
         `${name}: ${status}${localOnly ? " (only in the user's browser, never synced to GitHub)" : scenesController.autoSyncFor(name!) ? "" : " (auto-sync off)"}${pendingRename ? ` (rename on GitHub pending, still "${pendingRename}" there)` : ""}`,
       ),
     autoSyncInfo:
-      "The app pushes local changes of a scene to GitHub by itself (about 30 s after the last edit) and pulls/merges GitHub changes every 60 s, unless auto-sync is off for that scene. Local-only scenes are never synced. Agents don't need to push.",
+      "The app pushes local changes of a scene to GitHub by itself (about 10 s after the last edit) and pulls/merges GitHub changes within about 10 s, unless auto-sync is off for that scene. Local-only scenes are never synced. Agents don't need to push.",
   };
 };
 

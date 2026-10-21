@@ -75,7 +75,7 @@ claude -p "Draw our login flow and save it as scene 'Login Flow'" \
   marked as an agent commit ("Agent: update scene …"). The scenes server
   tells your app, which pulls it right away and merges it into what you have
   open, without moving your view or touching your other changes.
-- **You → agent:** your app pushes about 30 s after your last edit. When an
+- **You → agent:** your app pushes about 10 s after your last edit. When an
   agent reads or edits a scene, your app is asked to push that scene's
   changes first, so the agent always works on your latest state. That is
   the only thing an agent ever asks of your browser.
@@ -159,7 +159,7 @@ Template copies on the slides are made by your app when it opens the deck.
 Your browser is the source of truth for your own edits and works offline. Each scene shows its status:
 ✓ synced · ↑ not pushed · ↓ newer on GitHub · ⇅ changed on both sides (merged automatically) · ! conflict (you or an agent decide) · ○ only local.
 
-- **Agents never push your work.** Your app's auto-sync pushes about 30 s after your last edit (sooner when an agent asks for the scene), and pulls agent commits within seconds. Scenes with auto-sync off are pushed only when you say so; agents then don't see your unpushed changes.
+- **Agents never push your work.** Your app's auto-sync pushes about 10 s after your last edit (sooner when an agent asks for the scene), and pulls agent commits within seconds. Scenes with auto-sync off are pushed only when you say so; agents then don't see your unpushed changes.
 - **Local-only scenes** never leave your browser. Agents still read and edit them, through your open app (no commits). Set it per scene in the sidebar ("This scene: local only, never on GitHub") or with the "Local only" checkbox when creating a scene; switch back to auto-sync any time to publish it.
 - `save_scene` is for new scenes; existing ones are changed with `edit_scene`, which only touches the elements it names.
 - **Conflicts:** the merge compares elements by content, so only elements really changed differently on both sides clash. Ask the agent to resolve it: it looks at the clashes with `get_conflict` and decides per element with `resolve_conflict`, asking you when it's unclear.

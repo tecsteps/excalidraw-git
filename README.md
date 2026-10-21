@@ -198,16 +198,25 @@ version it is based on, which gives a visible status:
   edit it through the open app.
 
 - **Auto-sync** (default on; per-scene override "always / manual only"):
-  pushes after 30s without edits and when you leave the tab; pulls scenes
-  without local changes; checks GitHub every 60s; downloads all scenes so
+  pushes after 10s without edits and when you leave the tab; pulls scenes
+  without local changes; checks GitHub every 10s while the app is open (changes by others or agents show up within seconds); downloads all scenes so
   they're available offline.
-- **Both sides changed:** an element-level three-way merge. Elements are
-  compared by content, so re-saved but unchanged elements don't count.
-  Different elements merge automatically. The same element changed
-  differently on both sides becomes a **conflict**, and you choose *Keep
-  mine* (overwrite GitHub), *Take GitHub's*, or *Keep both* (yours becomes a
-  copy). Or ask an agent: it sees each clashing element in both versions
-  (`get_conflict`) and can decide element by element (`resolve_conflict`).
+- **Both sides changed** (two people, or you and an agent, on the same
+  scene): an element-level three-way merge. Elements are compared by
+  content, so re-saved but unchanged elements don't count. Different
+  elements merge automatically. When the same element was changed on both
+  sides, the newer edit wins, like in live collaboration (an edit beats a
+  delete); the Activity log names those elements. Switch off "Settle clashes
+  automatically" to decide yourself instead: the scene then shows a
+  **conflict** with *Keep mine* (overwrite GitHub), *Take GitHub's* or *Keep
+  both* (yours becomes a copy), or an agent decides element by element
+  (`get_conflict` / `resolve_conflict`).
+- **Several people:** everyone runs their own install against the same
+  repo. Your edits reach GitHub about 10 s after you stop drawing, and each
+  app notices other people's pushes within about 10 s, so a change shows up
+  on the other screens in roughly 20 s. Views are never moved by a merge.
+  Not realtime: no live cursors. Clock differences between machines decide
+  "newer" when the same element is changed within seconds.
 - **Offline:** everything keeps working. The sidebar shows "GitHub not
   reachable, working locally · N scenes waiting to sync", and syncing
   resumes when the connection is back.

@@ -118,3 +118,22 @@ export const mergeElements = (
   syncInvalidIndices(result as any);
   return { elements: result, clashes, fromMine, fromTheirs };
 };
+
+/**
+ * Settle clashes without asking, like live collaboration does: per element
+ * the newer edit wins (`updated` timestamp; on a tie GitHub's). An edit beats
+ * a delete, so nobody's work silently disappears.
+ */
+export const newestWins = (
+  mine: readonly El[],
+  theirs: readonly El[],
+  clashes: readonly string[],
+): Record<string, ClashChoice> => {
+  const [m, t] = [live(mine), live(theirs)];
+  const choices: Record<string, ClashChoice> = {};
+  for (const id of clashes) {
+    const [me, te] = [m.get(id), t.get(id)];
+    choices[id] = !me ? "theirs" : !te ? "mine" : ((me as any).updated ?? 0) > ((te as any).updated ?? 0) ? "mine" : "theirs";
+  }
+  return choices;
+};

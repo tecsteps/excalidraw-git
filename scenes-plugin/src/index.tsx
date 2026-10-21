@@ -210,7 +210,8 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
 const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: () => void }) => {
   const { current, list } = useScenes();
   const query = useSceneFilter();
-  const [active, setActive] = useState(0);
+  /** null: the default (first match, or create) */
+  const [picked, setActive] = useState<number | null>(null);
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -231,6 +232,10 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
     SCENE_NAME_RE.test(query.trim()) &&
     !list.some((item) => (item.name ?? UNTITLED_LABEL).toLowerCase().includes(needle));
   const count = items.length + (canCreate ? 1 : 0);
+  // highlight the first real match (the open scene is always listed, even
+  // when it doesn't match), or "create" when nothing matches
+  const firstMatch = items.findIndex((item) => (item.name ?? UNTITLED_LABEL).toLowerCase().includes(needle));
+  const active = picked ?? (needle && firstMatch < 0 && canCreate ? items.length : Math.max(0, firstMatch));
 
   const choose = (index: number) => {
     onClose();
@@ -251,10 +256,10 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
       onClose();
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((index) => (count ? (index + 1) % count : 0));
+      setActive(count ? (active + 1) % count : 0);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((index) => (count ? (index - 1 + count) % count : 0));
+      setActive(count ? (active - 1 + count) % count : 0);
     } else if (event.key === "Enter" && count) {
       event.preventDefault();
       choose(Math.min(active, count - 1));
@@ -270,7 +275,7 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
           value={query}
           onChange={(event) => {
             setSceneFilter(event.target.value);
-            setActive(0);
+            setActive(null);
           }}
         />
         {query && (
@@ -281,7 +286,7 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
             aria-label="Clear the filter"
             onClick={() => {
               setSceneFilter("");
-              setActive(0);
+              setActive(null);
             }}
           >
             ×
@@ -422,6 +427,38 @@ const SyncBar = ({ state, now }: { state: ScenesState; now: number }) => {
       <label className="scenes-switch">
         <input
           type="checkbox"
+          checked={scenesController.clashMode() === "newest"}
+          onChange={(event) => scenesController.setClashMode(event.target.checked ? "newest" : "ask")}
+        />
+        <span className="scenes-switch__track" />
+        <span className="scenes-switch__label">
+          Settle clashes automatically
+          <span className="scenes-switch__hint">
+            {scenesController.clashMode() === "newest"
+              ? "same element changed by two people: the newer edit wins"
+              : "same element changed by two people: you decide"}
+          </span>
+        </span>
+      </label>
+      <label className="scenes-switch">
+        <input
+          type="checkbox"
+          checked={scenesController.newScenesLocalOnly()}
+          onChange={(event) => scenesController.setNewScenesLocalOnly(event.target.checked)}
+        />
+        <span className="scenes-switch__track" />
+        <span className="scenes-switch__label">
+          New scenes local only
+          <span className="scenes-switch__hint">
+            {scenesController.newScenesLocalOnly()
+              ? "stay in this browser until you publish them"
+              : "go to GitHub with auto-sync"}
+          </span>
+        </span>
+      </label>
+      <label className="scenes-switch">
+        <input
+          type="checkbox"
           checked={autoSync}
           onChange={(event) => scenesController.setGlobalAutoSync(event.target.checked)}
         />
@@ -467,7 +504,7 @@ const currentStatusText = (
         ? "Only in this browser — pushed automatically after a short pause"
         : "Only in this browser — Save to put it on GitHub";
     case "local-only":
-      return "Local only — stays in this browser, never synced to GitHub. Switch it to auto-sync below to put it on GitHub.";
+      return "Local only — stays in this browser, never synced to GitHub. Publish puts it on GitHub.";
     case "untitled":
       return empty ? "Empty — draw something, then save it" : "Not saved yet — give it a name";
   }
@@ -492,7 +529,7 @@ const NameForm = ({
 }) => {
   const [value, setValue] = useState(initialValue);
   const offersLocalOnly = prompt.mode === "new" || prompt.mode === "save";
-  const [localOnly, setLocalOnly] = useState(false);
+  const [localOnly, setLocalOnly] = useState(() => scenesController.newScenesLocalOnly());
   const label = {
     save: "Name & save",
     saveAs: "Save as",
@@ -863,13 +900,21 @@ export const ScenesSidebar = () => {
               <button
                 type="button"
                 className="scenes-btn scenes-btn--primary"
-                disabled={isBusy || !!conflict || status === "local-only"}
-                title={status === "local-only" ? "Local only: kept in this browser, not pushed" : "Push to GitHub now"}
+                disabled={isBusy || !!conflict}
+                title={
+                  status === "local-only"
+                    ? "Put this scene on GitHub; it is synced from then on"
+                    : "Push to GitHub now"
+                }
                 onClick={() =>
-                  current === null ? setPrompt({ mode: "save" }) : scenesController.save().catch(ignore)
+                  current === null
+                    ? setPrompt({ mode: "save" })
+                    : status === "local-only"
+                    ? scenesController.setLocalOnly(current, false).then(() => scenesController.save()).catch(ignore)
+                    : scenesController.save().catch(ignore)
                 }
               >
-                {save} Save
+                {save} {status === "local-only" ? "Publish" : "Save"}
               </button>
               {current !== null && (
                 <button type="button" className="scenes-btn" disabled={isBusy} onClick={() => setPrompt({ mode: "saveAs" })}>
