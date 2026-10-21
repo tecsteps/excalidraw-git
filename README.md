@@ -199,7 +199,9 @@ version it is based on, which gives a visible status:
 
 - **Auto-sync** (default on; per-scene override "always / manual only"):
   pushes after 10s without edits and when you leave the tab; pulls scenes
-  without local changes; checks GitHub every 10s while the app is open (changes by others or agents show up within seconds); downloads all scenes so
+  without local changes; checks GitHub every 60s while the app is open (`SCENES_WATCH_INTERVAL_MS`
+  in `.env` to change it; agent edits on this machine arrive at once);
+  downloads all scenes so
   they're available offline.
 - **Both sides changed** (two people, or you and an agent, on the same
   scene): an element-level three-way merge. Elements are compared by
@@ -213,8 +215,8 @@ version it is based on, which gives a visible status:
   (`get_conflict` / `resolve_conflict`).
 - **Several people:** everyone runs their own install against the same
   repo. Your edits reach GitHub about 10 s after you stop drawing, and each
-  app notices other people's pushes within about 10 s, so a change shows up
-  on the other screens in roughly 20 s. Views are never moved by a merge.
+  app notices other people's pushes within a minute (set
+  `SCENES_WATCH_INTERVAL_MS`, e.g. `10000` for about 10 s). Views are never moved by a merge.
   Not realtime: no live cursors. Clock differences between machines decide
   "newer" when the same element is changed within seconds.
 - **Offline:** everything keeps working. The sidebar shows "GitHub not

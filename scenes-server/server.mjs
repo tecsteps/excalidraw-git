@@ -858,11 +858,11 @@ const server = http.createServer(async (req, res) => {
 // -----------------------------------------------------------------------------
 // watching GitHub: other people's (and other machines') pushes reach the open
 // tabs within seconds. While a user tab is connected, the server fetches
-// every few seconds and announces the scenes that changed, so the app syncs
+// every SCENES_WATCH_INTERVAL_MS (default 60s) and announces the scenes that changed, so the app syncs
 // right away instead of waiting for its own slower poll.
 // -----------------------------------------------------------------------------
 
-const WATCH_INTERVAL_MS = Number(env.SCENES_WATCH_INTERVAL_MS || 10000);
+const WATCH_INTERVAL_MS = Number(env.SCENES_WATCH_INTERVAL_MS || 60000);
 let watchedHead = null;
 
 const remoteHead = async () =>

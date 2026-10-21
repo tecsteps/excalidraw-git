@@ -1248,7 +1248,7 @@ ${MODE === "live" ? 'Note: while you draw, every create_view call is mirrored li
       "save_open_scene",
       {
         description:
-          "Push the scene open in the user's app to GitHub right now, including the user's edits. Usually NOT needed: with auto-sync on (the default) the app pushes by itself about 10 s after the last edit and pulls GitHub changes within about 10 s. Use it only when the user asks to save/commit/push now, or to give an untitled scene a name. If auto-sync is off for the scene, the user wants to decide when it goes to GitHub: only push when they ask.",
+          "Push the scene open in the user's app to GitHub right now, including the user's edits. Usually NOT needed: with auto-sync on (the default) the app pushes by itself about 10 s after the last edit and pulls GitHub changes within about a minute. Use it only when the user asks to save/commit/push now, or to give an untitled scene a name. If auto-sync is off for the scene, the user wants to decide when it goes to GitHub: only push when they ask.",
         inputSchema: { name: SCENE_NAME.optional() },
       },
       tool(async ({ name }) => text(await appCommand({ type: "save", ...(name ? { name } : {}) }))),
