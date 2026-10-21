@@ -3,7 +3,32 @@
 
 /** elements written in the short create_view format still need conversion */
 export const needsConversion = (el) =>
-  el.label !== undefined || el.version === undefined;
+  el.label !== undefined || el.version === undefined || el.markdown !== undefined;
+
+/**
+ * Markdown-like text as plain text (list markers kept): the formatting needs
+ * the browser (an open app) — without one the words still arrive
+ */
+const plainOfMarkdown = (markdown) => {
+  let numbered = 0;
+  return String(markdown)
+    .split("\n")
+    .map((line) => {
+      if (!/^\s*\d+[.)] /.test(line)) {
+        numbered = 0;
+      }
+      return line
+        .replace(/^(\s*)#{1,3} /, "$1")
+        .replace(/^(\s*)(?:[-*] )?\[([ xX])\] /, (_, indent, x) => `${indent}${x.trim() ? "☑" : "☐"} `)
+        .replace(/^(\s*)[-*•] /, "$1• ")
+        .replace(/^(\s*)\d+[.)] /, (_, indent) => `${indent}${++numbered}. `)
+        .replace(/\{(?:\s*(?:color|highlight|size)=[^\s}]+)+\s*\}([\s\S]*?)\{\/\}/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)\s]+\)/g, "$1")
+        .replace(/\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\*([^*\s][\s\S]*?)\*/g, (_, a, b, c, d) => a ?? b ?? c ?? d)
+        .replace(/\\([*_~[\]{}\\])/g, "$1");
+    })
+    .join("\n");
+};
 
 const rand = () => Math.floor(Math.random() * 2 ** 31);
 
@@ -57,7 +82,12 @@ export const convertInNode = (elements) => {
       byId.set(raw.id, raw);
       continue;
     }
-    const { label, ...rest } = raw;
+    const { label: rawLabel, markdown, ...rest } = raw;
+    if (typeof markdown === "string") {
+      rest.text = plainOfMarkdown(markdown);
+    }
+    const label =
+      typeof rawLabel?.markdown === "string" ? { ...rawLabel, text: plainOfMarkdown(rawLabel.markdown) } : rawLabel;
     const el = base(rest);
     if (el.type === "text") {
       Object.assign(el, {

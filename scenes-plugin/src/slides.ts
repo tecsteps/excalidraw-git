@@ -74,6 +74,8 @@ export type SlideData = {
   removedBy?: "sync";
   /** appears on the n-th click while presenting */
   step?: number;
+  /** slides: template elements the user removed from this slide (kept in the file, unlike deleted copies) */
+  hidden?: string[];
 };
 
 export type Frame = NonDeleted<ExcalidrawFrameElement>;
@@ -128,7 +130,50 @@ export const getSlides = (elements: readonly ExcalidrawElement[]): Frame[] => {
   });
 };
 
+/**
+ * Agents place elements relative to a slide: `slide` = slide number (1-based,
+ * deck order), frame id or "template"; x / y then count from the slide's
+ * top-left corner, and the element becomes part of the slide (frameId).
+ */
+export const placeOnSlides = <T extends Record<string, any> | null | undefined>(items: T[], all: readonly any[]): T[] => {
+  if (!items.some((el) => el && el.slide !== undefined && el.slide !== null)) {
+    return items;
+  }
+  const frames = all.filter((el) => el && el.type === "frame" && !el.isDeleted);
+  const slides = getSlides(frames as any);
+  return items.map((el) => {
+    if (!el || el.slide === undefined || el.slide === null) {
+      return el;
+    }
+    const { slide, ...rest } = el as Record<string, any>;
+    const frame =
+      slide === "template"
+        ? frames.find((f) => f.customData?.slides?.role === "template")
+        : typeof slide === "number" || /^\d+$/.test(String(slide))
+        ? slides[Number(slide) - 1]
+        : frames.find((f) => f.id === slide);
+    if (!frame) {
+      throw new Error(
+        `slide ${JSON.stringify(slide)}: no such slide (the deck has ${slides.length}; use a number from 1, a frame id or "template")`,
+      );
+    }
+    return {
+      ...rest,
+      ...(typeof rest.x === "number" ? { x: rest.x + frame.x } : {}),
+      ...(typeof rest.y === "number" ? { y: rest.y + frame.y } : {}),
+      frameId: frame.id,
+    } as unknown as T;
+  });
+};
+
 export const slideTitle = (frame: Frame, index: number) => frame.name?.trim() || `Slide ${index + 1}`;
+
+/** the click on which an element appears while presenting (0: always); bound labels follow their container */
+export const elementStep = (el: ExcalidrawElement, byId: ReadonlyMap<string, ExcalidrawElement>): number => {
+  const own = slideData(el).step ?? 0;
+  const containerId = (el as any).containerId;
+  return containerId ? Math.max(own, slideData(byId.get(containerId)).step ?? 0) : own;
+};
 
 /** elements of a slide (its frame children), incl. template copies */
 export const slideElements = (elements: readonly ExcalidrawElement[], frame: Frame) =>
@@ -283,18 +328,29 @@ export const syncTemplate = (
     };
     const fresh = wanted ? measureTexts(sources.map((src) => makeCopy(src, template!, slide, templateIds, vars))) : [];
     const freshIds = new Set(fresh.map((el) => el.id));
+    const wasHidden = slideData(slide).hidden || [];
+    const hidden = new Set(reset.has(slide.id) ? [] : wasHidden);
     for (const copy of fresh) {
       const sig = signature(copy as ExcalidrawElement);
       const existing = byId.get(copy.id) as any;
-      const withSig = { ...copy, customData: { ...copy.customData, slides: { copyOf: slideData(copy).copyOf, sig } } };
+      const srcId = slideData(copy).copyOf!;
+      const withSig = { ...copy, customData: { ...copy.customData, slides: { copyOf: srcId, sig } } };
+      if (existing && !existing.isDeleted) {
+        hidden.delete(srcId); // back on the slide (e.g. undo)
+      }
       if (!existing) {
-        added.push({ ...withSig, version: 1, versionNonce: Math.floor(Math.random() * 2 ** 31), updated: Date.now() });
+        if (!hidden.has(srcId)) {
+          added.push({ ...withSig, version: 1, versionNonce: Math.floor(Math.random() * 2 ** 31), updated: Date.now() });
+        }
         continue;
       }
       const data = slideData(existing);
       const hiddenByUser = existing.isDeleted && data.removedBy !== "sync";
+      if (hiddenByUser && !reset.has(slide.id)) {
+        hidden.add(srcId); // remembered on the slide: deleted elements aren't saved
+      }
       const overridden = !existing.isDeleted && data.sig !== undefined && signature(existing) !== data.sig;
-      if ((hiddenByUser || overridden) && !reset.has(slide.id)) {
+      if ((hiddenByUser || overridden || (existing.isDeleted && hidden.has(srcId))) && !reset.has(slide.id)) {
         continue; // the user changed it on this slide
       }
       const sameSize = copy.type !== "text" || Math.abs(existing.width - copy.width) < 1;
@@ -323,15 +379,58 @@ export const syncTemplate = (
         );
       }
     }
+    const nextHidden = [...hidden].filter((id) => templateIds.has(id)).sort();
+    if (nextHidden.join() !== [...wasHidden].sort().join()) {
+      replaced.set(slide.id, withSlideData(slide, { hidden: nextHidden.length ? nextHidden : undefined }));
+    }
   });
 
-  if (!replaced.size && !added.length) {
+  // new copies go to the bottom (backgrounds, headers under the slide's content)…
+  let next = [...added, ...elements.map((el) => replaced.get(el.id) ?? el)];
+  // …but above a slide's own full-size background, which would hide them
+  const reordered = liftCopiesAboveBackgrounds(next, slides);
+  if (!replaced.size && !added.length && !reordered) {
     return null;
   }
-  // new copies go to the bottom (backgrounds, headers under the slide's content)
-  const next = [...added, ...elements.map((el) => replaced.get(el.id) ?? el)];
+  next = reordered?.elements ?? next;
   syncInvalidIndices(next as any);
-  return { elements: next as ExcalidrawElement[], changed: replaced.size + added.length };
+  return { elements: next as ExcalidrawElement[], changed: replaced.size + added.length + (reordered?.moved ?? 0) };
+};
+
+/** a filled shape covering (nearly) the whole slide */
+const isSlideBackground = (el: ExcalidrawElement, slide: Frame) =>
+  !el.isDeleted &&
+  el.frameId === slide.id &&
+  !el.angle &&
+  (el.type === "image" || (["rectangle", "ellipse", "diamond"].includes(el.type) && el.backgroundColor !== "transparent")) &&
+  el.width * el.height >= slide.width * slide.height * 0.85;
+
+const liftCopiesAboveBackgrounds = (elements: ExcalidrawElement[], slides: Frame[]) => {
+  let list = elements;
+  let moved = 0;
+  for (const slide of slides) {
+    const isBackground = (el: ExcalidrawElement) => isSlideBackground(el, slide);
+    const lastBackground = list.reduce(
+      (last, el, i) => (isBackground(el) && !slideData(el).copyOf ? i : last),
+      -1,
+    );
+    if (lastBackground < 0) {
+      continue;
+    }
+    // the template's own full-size background stays below the slide's
+    const buried = list.filter(
+      (el, i) => i < lastBackground && el.frameId === slide.id && !el.isDeleted && slideData(el).copyOf && !isBackground(el),
+    );
+    if (!buried.length) {
+      continue;
+    }
+    const ids = new Set(buried.map((el) => el.id));
+    const rest = list.filter((el) => !ids.has(el.id));
+    const at = rest.findIndex((el) => el.id === list[lastBackground].id) + 1;
+    list = [...rest.slice(0, at), ...buried.map((el) => newElementWith(el, { index: null } as any)), ...rest.slice(at)];
+    moved += buried.length;
+  }
+  return moved ? { elements: list, moved } : null;
 };
 
 /** what decides whether the template sync has anything to do */
@@ -347,7 +446,7 @@ export const templateKey = (elements: readonly ExcalidrawElement[], deck: string
     }
   }
   for (const slide of slides) {
-    parts.push(slide.id, slide.x, slide.y, slide.width, slide.height, slide.name, slideData(slide).template);
+    parts.push(slide.id, slide.x, slide.y, slide.width, slide.height, slide.name, slideData(slide).template, slideData(slide).hidden);
   }
   // copies the user deleted or edited don't need a sync; missing ones do
   parts.push(elements.filter((el) => slideData(el).copyOf && !el.isDeleted).length);

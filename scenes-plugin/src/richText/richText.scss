@@ -1,0 +1,235 @@
+// The formatted text editor (see editor.ts) and its toolbar (toolbar.ts).
+// The paragraphs' own layout (sizes, list indents) is inline — the same
+// for the editor and for measuring (layout.ts).
+
+.excalidraw .excalidraw-textEditorContainer > .rt-editor {
+  pointer-events: auto;
+}
+
+.rt-editor {
+  outline: none;
+  cursor: text;
+
+  .rt-p {
+    position: relative;
+
+    &[data-m]::before {
+      content: attr(data-m);
+      position: absolute;
+      left: 0;
+      width: calc(var(--rt-indent) - 0.35em);
+      text-align: right;
+      font-weight: normal;
+      font-style: normal;
+      text-decoration: none;
+      white-space: pre;
+      pointer-events: none;
+    }
+
+    &[data-k="todo"]::before {
+      content: "";
+      left: calc(var(--rt-indent) - 0.35em - 0.72em);
+      width: 0.72em;
+      height: 0.72em;
+      top: calc(0.5lh - 0.36em);
+      box-sizing: border-box;
+      border: max(1px, 0.07em) solid currentColor;
+      border-radius: 0.13em;
+      cursor: pointer;
+      pointer-events: auto;
+    }
+
+    &[data-k="todo"][data-x]::after {
+      content: "";
+      position: absolute;
+      left: calc(var(--rt-indent) - 0.35em - 0.72em + 0.25em);
+      top: calc(0.5lh - 0.36em + 0.1em);
+      width: 0.2em;
+      height: 0.38em;
+      box-sizing: border-box;
+      border: solid currentColor;
+      border-width: 0 0.09em 0.09em 0;
+      transform: rotate(45deg);
+      pointer-events: none;
+    }
+  }
+
+  [data-a] {
+    cursor: pointer;
+  }
+}
+
+.rt-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--zIndex-wysiwyg, 3) + 2);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--island-bg-color, #fff);
+  box-shadow: var(--shadow-island, 0 1px 5px rgba(0, 0, 0, 0.15));
+  color: var(--color-on-surface, #1b1b1f);
+  font-family: var(--ui-font, system-ui, sans-serif);
+  font-size: 13px;
+  user-select: none;
+  white-space: nowrap;
+
+  &__button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
+    }
+
+    &--active,
+    &--open {
+      background: var(--color-surface-primary-container, #e0dfff);
+      color: var(--color-on-primary-container, #030064);
+    }
+
+    &--size {
+      min-width: 52px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+  }
+
+  &__bar {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 4px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--rt-bar, currentColor);
+  }
+
+  &__button:has(.rt-toolbar__bar) svg {
+    margin-top: -4px;
+  }
+
+  &__sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 3px;
+    background: var(--default-border-color, rgba(0, 0, 0, 0.12));
+  }
+
+  &__popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    padding: 8px;
+    border-radius: 10px;
+    background: var(--island-bg-color, #fff);
+    box-shadow: var(--shadow-island, 0 1px 5px rgba(0, 0, 0, 0.15));
+  }
+
+  &__swatches {
+    display: grid;
+    grid-template-columns: repeat(5, 26px);
+    gap: 6px;
+  }
+
+  &__swatch {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 6px;
+    background: var(--swatch);
+    cursor: pointer;
+
+    &--none {
+      background: linear-gradient(
+        to top right,
+        transparent calc(50% - 1px),
+        #e03131 calc(50% - 1px),
+        #e03131 calc(50% + 1px),
+        transparent calc(50% + 1px)
+      );
+    }
+
+    &--active {
+      outline: 2px solid var(--color-primary, #6965db);
+      outline-offset: 1px;
+    }
+  }
+
+  &__sizes {
+    display: flex;
+    flex-direction: column;
+    max-height: 260px;
+    overflow-y: auto;
+    min-width: 88px;
+  }
+
+  &__size {
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+
+    &:hover {
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
+    }
+
+    &--active {
+      font-weight: 700;
+      color: var(--color-primary, #6965db);
+    }
+  }
+
+  &__link {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+
+    input {
+      width: 240px;
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--default-border-color, rgba(0, 0, 0, 0.2));
+      border-radius: 6px;
+      background: var(--input-bg-color, #fff);
+      color: inherit;
+      font: inherit;
+    }
+
+    button {
+      height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 6px;
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+
+      &[type="submit"] {
+        background: var(--color-primary, #6965db);
+        color: #fff;
+      }
+    }
+  }
+}

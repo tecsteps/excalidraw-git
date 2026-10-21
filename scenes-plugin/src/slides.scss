@@ -206,6 +206,21 @@
     cursor: pointer;
   }
 
+  .slides-check--off {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .slides-pdf__pick {
+    flex: 1;
+    min-width: 0;
+    min-height: 1.8rem;
+  }
+
+  .slides-hint--error {
+    color: var(--color-danger, #c92a2a);
+  }
+
   .slides-steps {
     display: flex;
     flex-wrap: wrap;

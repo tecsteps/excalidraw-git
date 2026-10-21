@@ -113,9 +113,12 @@ The tools describe themselves, so plain requests work:
 |---|---|
 | `read_me` | Element format cheat sheet: shapes, labels, arrows, colors. The agent calls it once before drawing. |
 | `create_view` | Draws a new diagram and returns a `checkpointId` (a draft in the agent's headless Excalidraw). |
-| **`view_scene`** | **Returns an actual PNG image to the agent**, of a scene or a draft. Optional `elementIds` / `region` zoom in, `maxSize` caps the size. |
+| **`view_scene`** | **Returns an actual PNG image to the agent**, of a scene or a draft. Optional `elementIds` / `region` zoom in, `maxSize` caps the size. `slide: 3` shows a slide exactly as presented (template, page numbers), `step: 1` after the first click; `slides: "all"` puts the whole deck in one image. |
+| **`validate_deck`** | Checks a presentation slide by slide, measured by Excalidraw: cut-off, overlapping, overflowing, too small or low-contrast text, text hidden under shapes, elements not part of their slide, broken click steps, missing notes. Also lists the slides. |
+| `export_pdf` | Writes a PDF of a deck (all slides or e.g. `"2-4"`), with real text. |
+| `measure_text` | How wide and tall text will be in a given font and size (and how it wraps), measured by Excalidraw; also for formatted text (`markdown`). |
 | **`read_scene`** | Reads a scene (your app pushes its pending changes first) and reports **`userChanges`**: what you added, changed or deleted since an agent last edited it. Returns a `revision`; `since=<revision>` gives exactly the changes since then, `view=true` adds an image of them. |
-| **`edit_scene`** | Adds, updates or deletes elements in the agent's own copy and commits it right away; your app merges it within seconds. Returns an image of the edited area and the new `revision`. |
+| **`edit_scene`** | Adds, updates or deletes elements in the agent's own copy and commits it right away; your app merges it within seconds. Works like the editor: moved shapes take their labels and arrows along, a moved slide takes its content; `label: {text}` changes a shape's label; `markdown` instead of `text` writes formatted text (bold, lists, colors). Returns an image of the edited area and the new `revision`. |
 | `get_scene` | A scene as stored on GitHub, as data. `summary=true` (the default for big scenes) gives bounds, counts and all labels with positions. `region` / `elementIds` select a part. |
 | `save_scene` | Commits a **new** drawing (`checkpointId` or `elements`). `open: true` switches your app to it. Existing scenes are changed with `edit_scene`; `replace: true` overwrites one completely. |
 | `open_scene` | Switches your app to a scene, only when you ask. `create: true` makes a new one. |

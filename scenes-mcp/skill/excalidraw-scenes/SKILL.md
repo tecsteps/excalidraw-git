@@ -89,6 +89,34 @@ you.
   a JSON file and pass `file: "/abs/path.json"` (`save_scene`:
   `elementsFile`) instead of pasting it into the call.
 
+## Formatted text (bold, lists, colors in one text)
+
+One text element (or a shape's label) can mix formatting: write `markdown`
+instead of `text`, e.g. a title, a sentence and bullets in one box:
+
+```json
+{ "type": "text", "id": "t1", "x": 100, "y": 100, "fontSize": 28, "fontFamily": 6,
+  "markdown": "# Quarterly plan\nWe focus on **three** things:\n- Ship the editor\n  - nested, {size=0.8}smaller{/}\n1. First\n2. Second\n[x] Done\n[ ] Open" }
+```
+
+- Lines: `# ` / `## ` / `### ` headings (bold, 1.6× / 1.3× / 1.1× size),
+  `- ` bullets, `1. ` numbered, `[ ] ` / `[x] ` checklist; 2 spaces per
+  nesting level. Inline: `**bold**`, `*italic*`, `__underline__`,
+  `~~strike~~`, `[text](https://…)`, and
+  `{color=#e03131 highlight=#ffec99 size=0.8}text{/}` (size relative to the
+  element's `fontSize`). Escape a literal `*` etc. with `\`.
+- Labels: `label: { "markdown": "**Title**\n- point" }`. List items are
+  left-aligned in centered text; the rest keeps `textAlign`.
+- Edit with `update: [{ "id": "t1", "markdown": "…" }]` or
+  `{ "id": "<shape>", "label": { "markdown": "…" } }`. A plain `text` update
+  drops the formatting.
+- A wrapping text box: `"width": 800, "autoResize": false` (lines wrap at
+  800px; `x` is its left edge).
+- Reading a scene shows formatted texts with `markdown` next to `text` (the
+  plain words, list markers included). `measure_text` takes `markdown` too.
+- The user formats text in the app with a toolbar above the text being
+  edited, or the usual shortcuts (⌘B, ⌘I, ⌘U, ⌘⇧X, ⌘⇧7/8/9 lists, ⌘K link).
+
 ## Seeing scenes (they can be huge)
 
 - `view_scene(name)`: a scene, incl. the user's latest pushed edits;
@@ -129,23 +157,60 @@ Every frame of a scene is a slide; the user presents with the "Slides" button
   "customData": { "slides": { "order": 0, "notes": "speaker notes" } } }`.
   Elements added later to a slide get `"frameId": "s1"`. Lay slides out in a
   row with a gap (e.g. 240) and keep everything inside its frame.
-- `"skip": true` hides a slide while presenting; `"template": false` turns
-  the template off for that slide (title slides).
+- Slide-relative placement: give an element `"slide": 3` (number in deck
+  order, a frame id, or `"template"`) and its `x` / `y` count from that
+  slide's top-left corner; it becomes part of the slide. Works in
+  `save_scene` and in `edit_scene` (`add` and `update`).
+- In the slide frame's `customData.slides`: `"skip": true` hides a slide
+  while presenting; `"template": false` turns the template off for that
+  slide (title slides).
 - Click-by-click reveals: `"customData": { "slides": { "step": 1 } }` on
   elements (1, 2, 3 …; a shape's label follows its shape).
 - Template: one frame with `"customData": { "slides": { "role": "template",
   "theme": { "fontFamily": 5, "titleSize": 72, "bodySize": 36, "textColor":
   "#1e1e1e", "strokeColor": "#1e1e1e", "roughness": 1, "strokeWidth": 2,
   "fillStyle": "solid", "transition": "glide" } } }`. Its elements (header,
-  footer, logo, background) are copied onto every slide by the user's app;
-  texts may use `{page}` `{total}` `{title}` `{deck}` `{date}`. Never edit
-  the copies (ids `<element>~<slide>`); change the template instead.
-- Use the theme's title / body sizes and font for text, so it follows when
-  the user changes the deck style. Make slides visual: shapes, arrows,
-  icons, sticky notes (`"type": "stickynote"` with `label`), crow's-foot ER
-  diagrams, hand-drawn charts; not just bullet text.
+  footer, logo, background) are copied onto every slide when you save or
+  edit the deck (and by the user's app). Template texts may use
+  placeholders: `{page}` (slide number), `{total}` (number of slides),
+  `{title}` (the slide frame's name), `{deck}` (the scene name), `{date}`
+  (today, in the viewer's locale). They are filled in only in template
+  elements. Never edit the copies (ids `<element>~<slide>`); change the
+  template instead.
+- Text alignment: give a text `width` and its `textAlign` (left, center,
+  right) aligns it inside the box from `x` to `x + width` (e.g. a caption
+  centered under a shape). Without `width`, `x` is the left edge, the
+  center or the right edge, following `textAlign`.
+- Closed, filled lines (area charts, outlines): `"type": "line"` with the
+  last point equal to the first, `"polygon": true` and a `backgroundColor`.
+- Theme: in a deck, text (and labels) without `fontFamily` / `strokeColor`
+  get the theme's font and text color, and follow when the user changes the
+  deck style. Use the theme's `titleSize` / `bodySize` for titles and body.
+  Make slides visual: shapes, arrows, icons, sticky notes (`"type":
+  "stickynote"` with `label`), crow's-foot ER diagrams, hand-drawn charts;
+  not just bullet text.
+- Sticky notes show their creation date in the bottom-right corner (e.g.
+  "21 Oct"). Pass `"created": null` to leave it out (cleaner on slides).
+- Arrows that should route around boxes at right angles: `"elbowed": true`
+  (with `startBinding` / `endBinding`).
 - Text padding of a shape (distance of its label from the border):
   `"customData": { "textPadding": 20 }` (default 5).
+- Changing a deck with `edit_scene` works like the editor: moving or
+  resizing a shape moves its label and the arrows bound to it; moving a
+  slide frame moves everything on it; `{ "id": "box", "label": { "text":
+  "New" } }` changes (or adds) a shape's label, which is re-wrapped and the
+  shape grows to fit.
+- Check your work: `validate_deck(name)` lists the slides and finds cut-off,
+  overlapping, overflowing, too small or low-contrast text, elements not
+  part of their slide, broken click steps and missing notes.
+  `view_scene(name, slide: 3)` shows slide 3 exactly as presented (template
+  included); add `step: 1` to see it after the first click.
+  `view_scene(name, slides: "all")` shows the whole deck in one image
+  (`steps: true`: every click state).
+- `measure_text(items)` tells you how wide and tall text will be (and how it
+  wraps at `maxWidth`) before you place it: size boxes and cells with it.
+- PDF: `export_pdf(name)` (all slides, or `slides: [1, 3]`) writes a PDF
+  with real, selectable text.
 
 ## Local-only scenes
 

@@ -171,11 +171,50 @@ pill) opens the deck:
   fill and transition, stored with the template. New elements use it, and
   elements that still have the deck's values follow when you change it.
   Anything you styled by hand on a slide stays.
-- **PDF** exports one page per slide (skipped slides left out).
+- **PDF**: the whole deck, the selected slide or any slides ("1, 3-5"),
+  one 16:9 page per slide, title slides and template included. Text stays
+  real text (selectable, searchable) with the fonts embedded once, and
+  pictures used on many slides (like the logo) are stored once: a 12-slide
+  deck is about 300 KB. The scenes server prints it with your Chrome; if it
+  can't, the browser's print dialog opens instead ("Save as PDF").
+- Deleting a template element on one slide (unlock it, delete it) keeps it
+  off that slide, on every device, until **Reset to template**.
 
 All of it is stored in the scene itself, so decks sync, merge and travel
 like any other scene, and agents can build them (see the skill). The scene
 "Example - Presentation" shows what is possible.
+
+### Formatted text
+
+Text can be formatted in parts, like in a word processor: a bold title,
+normal text, then bullets in a smaller size, all in one text or one
+shape's label. While you edit a text, a toolbar above it offers size, bold,
+italic, underline, strikethrough, checklist, numbered and bulleted lists,
+link, text color, highlight and clear formatting. The usual shortcuts work
+too:
+
+| Shortcut | |
+| --- | --- |
+| ⌘B / ⌘I / ⌘U | bold / italic / underline |
+| ⌘⇧X | strikethrough |
+| ⌘⇧7 / ⌘⇧8 / ⌘⇧9 | numbered list / bullets / checklist |
+| Tab / ⇧Tab | indent / outdent a list item |
+| ⌘K | link (⌘-click opens it while editing) |
+| ⌘⇧H | highlight |
+| ⌘⇧. / ⌘⇧, | larger / smaller (the selection; with nothing selected, the whole text) |
+| ⌘\ | clear formatting |
+| ⌘Z / ⌘⇧Z | undo / redo while editing |
+
+(Ctrl instead of ⌘ on Windows and Linux.) Click a checkbox to tick it.
+Pasting from Google Docs or a web page keeps bold, italic, links and
+lists. The properties panel's font size, font and color still apply to
+the whole text; sizes set in the text stay relative to it.
+
+The formatting is stored in the element (`customData.rich`); its `text`
+stays the plain words, list markers included, so search, copy and other
+Excalidraw apps still see the text. Exports (PNG, SVG, PDF) show the
+formatting, and in SVG and PDF text stays text, links included. Agents
+write formatted text as markdown (see the skill).
 
 ### Text padding
 

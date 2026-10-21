@@ -95,6 +95,35 @@ const tintSvg = (svg, color, set) => {
   return svg.replace(/currentColor/g, color);
 };
 
+/** lucide's icon names with their tags (for suggestions), loaded once */
+let lucideTags = null;
+const loadLucideTags = async () => {
+  if (!lucideTags) {
+    lucideTags = fetchBytes("https://unpkg.com/lucide-static/tags.json")
+      .then(({ bytes }) => JSON.parse(bytes.toString("utf8")))
+      .catch(() => ((lucideTags = null), {}));
+  }
+  return lucideTags;
+};
+
+/** lucide icons whose name or tags match the words of a missing name */
+const suggestIcons = async (name) => {
+  const tags = await loadLucideTags();
+  const words = name.split("-").filter((word) => word.length > 2);
+  const score = (icon) =>
+    words.reduce(
+      (sum, word) =>
+        sum + (icon.split("-").includes(word) ? 3 : icon.includes(word) ? 2 : 0) + ((tags[icon] || []).some((tag) => tag.includes(word)) ? 1 : 0),
+      0,
+    );
+  return Object.keys(tags)
+    .map((icon) => [icon, score(icon)])
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)
+    .slice(0, 6)
+    .map(([icon]) => `lucide:${icon}`);
+};
+
 const loadSource = async (el) => {
   if (el.svg) {
     return { bytes: Buffer.from(String(el.svg)), mimeType: "image/svg+xml", what: "inline svg" };
@@ -141,12 +170,28 @@ const loadSource = async (el) => {
 export const resolveImages = async (elements) => {
   const files = {};
   const out = [];
-  for (const el of elements) {
-    if (el?.type !== "image" || el.fileId || !(el.src || el.svg || el.icon)) {
+  const wanted = (el) => el?.type === "image" && !el.fileId && (el.src || el.svg || el.icon);
+  // load all sources first, so every unknown icon is reported at once
+  const loaded = await Promise.all(
+    elements.map((el) => (wanted(el) ? loadSource(el).catch((error) => ({ error, el })) : null)),
+  );
+  const failed = loaded.filter((source) => source?.error);
+  if (failed.length) {
+    const lines = await Promise.all(
+      failed.map(async ({ error, el }) => {
+        const [set, name] = String(el.icon || "").split(":");
+        const ideas = set === "lucide" && name ? await suggestIcons(name) : [];
+        return `- ${el.id ? `${el.id}: ` : ""}${error.message}${ideas.length ? `; similar: ${ideas.join(", ")}` : ""}`;
+      }),
+    );
+    throw new Error(`${failed.length} image${failed.length === 1 ? "" : "s"} could not be loaded (nothing was saved):\n${lines.join("\n")}`);
+  }
+  for (const [i, el] of elements.entries()) {
+    if (!wanted(el)) {
       out.push(el);
       continue;
     }
-    const source = await loadSource(el);
+    const source = loaded[i];
     if (source.mimeType === "image/svg+xml") {
       source.bytes = Buffer.from(sizedSvg(source.bytes.toString("utf8")));
     }

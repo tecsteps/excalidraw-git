@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import clsx from "clsx";
 
 import { deck } from "./deck";
-import { getSlides, getTheme, slideData } from "./slides";
+import { elementStep, getSlides, getTheme, slideData } from "./slides";
 
 import type { Frame } from "./slides";
 import type { AppState } from "@excalidraw/excalidraw/types";
@@ -201,11 +201,7 @@ class Presenter {
     }
     const elements = api.getSceneElements();
     const byId = new Map(elements.map((el) => [el.id, el]));
-    const stepOf = (el: any): number => {
-      const own = slideData(el).step ?? 0;
-      // bound labels follow their container
-      return el.containerId ? Math.max(own, slideData(byId.get(el.containerId)).step ?? 0) : own;
-    };
+    const stepOf = (el: any) => elementStep(el, byId);
     const items = elements.filter((el) => el.frameId === frame.id && stepOf(el) > 0);
     const build = (progress: number) => {
       const overrides = new Map<string, { opacity?: number; offset?: { x: number; y: number } }>();

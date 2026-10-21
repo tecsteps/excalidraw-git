@@ -7,17 +7,15 @@ import clsx from "clsx";
 
 import { scenesController } from "./controller";
 import { deck } from "./deck";
-import { buildPdf, canvasToJpeg } from "./pdf";
+import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { presenter } from "./present";
 import {
-  SLIDE_WIDTH,
   addSlide,
   applyTheme,
   createTemplate,
   getTemplate,
   getTheme,
   patchSlideData,
-  renderSlide,
   setSlideOrder,
   slideData,
   withSlideData,
@@ -89,24 +87,101 @@ const resetSlides = (ids: string[]) => {
   deck.runTemplateSync({ reset: new Set(ids) });
 };
 
-const exportPdf = async (setBusy: (busy: string | null) => void) => {
+type PdfChoice = "all" | "current" | "pick";
+
+const exportPdf = async (spec: string, { includeSkipped }: { includeSkipped: boolean }, setBusy: (busy: string | null) => void) => {
   const elements = api().getSceneElementsIncludingDeleted();
-  const files = api().getFiles();
-  const background = api().getAppState().viewBackgroundColor;
-  const slides = deck.getState().slides.filter((s) => !s.skip);
-  const pages = [];
-  for (const [i, slide] of slides.entries()) {
-    setBusy(`Rendering slide ${i + 1} of ${slides.length}…`);
-    const canvas = await renderSlide(elements, files, slide.frame, { width: SLIDE_WIDTH, background });
-    pages.push(await canvasToJpeg(canvas));
+  const name = scenesController.getState().current ?? "Untitled";
+  const frames = pickSlides(elements, spec, { includeSkipped });
+  setBusy(`Preparing ${frames.length} slide${frames.length === 1 ? "" : "s"}…`);
+  const html = await slidesHtml(elements, api().getFiles(), frames, {
+    deck: name,
+    background: api().getAppState().viewBackgroundColor,
+  });
+  let blob: Blob;
+  try {
+    setBusy("Printing PDF…");
+    blob = await printToPdf(html);
+  } catch (error) {
+    // scenes server without PDF support (or no Chrome): the browser prints it
+    console.warn("PDF via scenes server failed, using the print dialog", error);
+    setBusy(null);
+    printInBrowser(html);
+    return;
   }
-  const blob = buildPdf(pages);
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `${scenesController.getState().current ?? "slides"}.pdf`;
+  const suffix = spec === "all" ? "" : frames.length === 1 ? ` - slide ${deck.getState().slides.findIndex((s) => s.id === frames[0].id) + 1}` : ` - slides ${spec.replace(/\s+/g, "")}`;
+  link.download = `${name}${suffix}.pdf`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
   setBusy(null);
+};
+
+/** PDF of the whole deck, the current slide or picked slides */
+const PdfPanel = ({ onClose }: { onClose: () => void }) => {
+  const { slides, activeId } = useDeck();
+  const current = slides.find((s) => s.id === activeId);
+  const [choice, setChoice] = useState<PdfChoice>(current ? "current" : "all");
+  const [pick, setPick] = useState("");
+  const [includeSkipped, setIncludeSkipped] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const shown = slides.filter((s) => includeSkipped || !s.skip).length;
+  const spec = choice === "all" ? "all" : choice === "current" ? String((current?.index ?? 0) + 1) : pick;
+  return (
+    <section className="slides-details slides-pdf">
+      <div className="slides-section__title">Export PDF</div>
+      <label className="slides-check">
+        <input type="radio" checked={choice === "all"} onChange={() => setChoice("all")} />
+        Whole deck ({shown} slide{shown === 1 ? "" : "s"})
+      </label>
+      <label className={clsx("slides-check", { "slides-check--off": !current })}>
+        <input type="radio" disabled={!current} checked={choice === "current"} onChange={() => setChoice("current")} />
+        {current ? `This slide (${current.index + 1}: ${current.title})` : "This slide (select one first)"}
+      </label>
+      <label className="slides-check">
+        <input type="radio" checked={choice === "pick"} onChange={() => setChoice("pick")} />
+        Slides
+        <input
+          className="slides-input slides-pdf__pick"
+          placeholder="e.g. 1, 3-5"
+          value={pick}
+          onFocus={() => setChoice("pick")}
+          onChange={(event) => setPick(event.target.value)}
+        />
+      </label>
+      {choice === "all" && slides.some((s) => s.skip) && (
+        <label className="slides-check">
+          <input type="checkbox" checked={includeSkipped} onChange={(event) => setIncludeSkipped(event.target.checked)} />
+          Include skipped slides
+        </label>
+      )}
+      <div className="slides-row">
+        <button
+          type="button"
+          className="slides-btn slides-btn--primary"
+          disabled={!!busy || (choice === "pick" && !pick.trim())}
+          onClick={() => {
+            setError(null);
+            exportPdf(spec, { includeSkipped }, setBusy)
+              .then(onClose)
+              .catch((err) => {
+                setBusy(null);
+                setError(err.message);
+              });
+          }}
+        >
+          {busy ?? "Download PDF"}
+        </button>
+        <button type="button" className="slides-btn" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+      {error && <p className="slides-hint slides-hint--error">{error}</p>}
+      <p className="slides-hint">Text stays text: selectable and searchable in the PDF.</p>
+    </section>
+  );
 };
 
 // -----------------------------------------------------------------------------
@@ -399,7 +474,7 @@ const ThemeForm = () => {
 
 export const SlidesSidebar = () => {
   const { slides, activeId } = useDeck();
-  const [busy, setBusy] = useState<string | null>(null);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const active = slides.find((s) => s.id === activeId) ? activeId : null;
   return (
     <Sidebar name={SLIDES_SIDEBAR_NAME} className="slides-sidebar">
@@ -430,16 +505,14 @@ export const SlidesSidebar = () => {
           <button
             type="button"
             className="slides-btn"
-            disabled={!slides.length || !!busy}
-            onClick={() => exportPdf(setBusy).catch((error) => {
-              setBusy(null);
-              window.alert(`PDF export failed: ${error.message}`);
-            })}
+            disabled={!slides.length}
+            aria-pressed={pdfOpen}
+            onClick={() => setPdfOpen(!pdfOpen)}
           >
             PDF
           </button>
         </div>
-        {busy && <div className="slides-hint">{busy}</div>}
+        {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
         {!slides.length ? (
           <p className="slides-hint">
             Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them.

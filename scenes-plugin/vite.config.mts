@@ -165,6 +165,158 @@ const textPadding = () => ({
   },
 });
 
+const RICH_LAYOUT_ENTRY = path.resolve(HERE, "src/richText/layout.ts");
+const RICH_EDITOR_ENTRY = path.resolve(HERE, "src/richText/editor.ts");
+
+/**
+ * Formatted text (`customData.rich`, see src/richText): Excalidraw measures,
+ * wraps and draws text as one font and size. These patches hand formatted
+ * texts to src/richText/layout.ts instead (measuring and wrapping, the
+ * canvas, SVG export), and give the text editor a contenteditable with a
+ * formatting toolbar instead of its textarea (src/richText/editor.ts).
+ */
+const richText = () => ({
+  name: "excalidraw-scenes-rich-text",
+  enforce: "pre" as const,
+  transform(code: string, id: string) {
+    const file = id.replace(/\\/g, "/").split("?")[0];
+    const patch = (name: string, entry: string, imports: string[], steps: Array<[string | RegExp, string, number?]>) => {
+      let next = code;
+      for (const [from, to, count = 1] of steps) {
+        const found =
+          typeof from === "string" ? next.split(from).length - 1 : (next.match(new RegExp(from.source, "g")) || []).length;
+        if (found !== count) {
+          throw new Error(
+            `[excalidraw-scenes] rich text: ${name} changed upstream (expected ${count}× ${String(from).slice(0, 80)}, found ${found}). Update scenes-plugin/vite.config.mts.`,
+          );
+        }
+        next = typeof from === "string" ? next.split(from).join(to) : next.replace(new RegExp(from.source, "g"), to);
+      }
+      const head = imports.length ? `import { ${imports.join(", ")} } from ${JSON.stringify(entry)};\n` : "";
+      return { code: head + next, map: null };
+    };
+    const MEASURE = ["richMeasure as __richMeasure", "richWrap as __richWrap"];
+
+    if (file.endsWith("/packages/element/src/renderElement.ts")) {
+      return patch("renderElement.ts", RICH_LAYOUT_ENTRY, ["drawRich as __richDraw"], [
+        [
+          "      if (isTextElement(element)) {\n        const rtl = isRTL(element.text);",
+          "      if (\n        isTextElement(element) &&\n        __richDraw(element as any, context, renderConfig.theme === THEME.DARK)\n      ) {\n        // formatted text: drawn by the scenes plugin\n      } else if (isTextElement(element)) {\n        const rtl = isRTL(element.text);",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/excalidraw/renderer/staticSvgScene.ts")) {
+      return patch("staticSvgScene.ts", RICH_LAYOUT_ENTRY, ["svgRich as __richSvg"], [
+        [
+          '        for (let i = 0; i < lines.length; i++) {\n          const text = svgRoot.ownerDocument.createElementNS(SVG_NS, "text");',
+          '        const __isRich = __richSvg(element as any, node, svgRoot.ownerDocument, renderConfig.theme === THEME.DARK);\n        for (let i = 0; !__isRich && i < lines.length; i++) {\n          const text = svgRoot.ownerDocument.createElementNS(SVG_NS, "text");',
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/element/src/newElement.ts")) {
+      return patch("newElement.ts", RICH_LAYOUT_ENTRY, MEASURE, [
+        [
+          "    if (measureText(text, font, textElement.lineHeight).width > maxWidth) {\n      const wrappedText = wrapText(text, font, maxWidth);",
+          "    if (\n      (__richMeasure(textElement as any, text) ?? measureText(text, font, textElement.lineHeight)).width > maxWidth\n    ) {\n      const wrappedText = __richWrap(textElement as any, text, maxWidth) ?? wrapText(text, font, maxWidth);",
+        ],
+        [
+          "    text = wrapText(\n      text,\n      getFontString(textElement),\n      container\n        ? getBoundTextMaxWidth(container, textElement)\n        : textElement.width,\n    );",
+          "    const __maxWidth = container\n      ? getBoundTextMaxWidth(container, textElement)\n      : textElement.width;\n    text =\n      __richWrap(textElement as any, text, __maxWidth) ??\n      wrapText(text, getFontString(textElement), __maxWidth);",
+        ],
+        [
+          "  let { width: nextWidth, height: nextHeight } = measureText(\n    nextText,",
+          "  let { width: nextWidth, height: nextHeight } = __richMeasure(element as any, nextText) ?? measureText(\n    nextText,",
+        ],
+        // the size before the change: the element's own
+        [
+          "    const prevMetrics = measureText(\n      element.text,",
+          "    const prevMetrics = (element.customData?.rich ? { width: element.width, height: element.height } : null) ?? measureText(\n      element.text,",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/element/src/textElement.ts")) {
+      return patch("textElement.ts", RICH_LAYOUT_ENTRY, MEASURE, [
+        [
+          "    boundTextUpdates.text = wrapText(\n      textElement.originalText,",
+          "    boundTextUpdates.text = __richWrap(textElement as any, textElement.originalText, maxWidth) ?? wrapText(\n      textElement.originalText,",
+        ],
+        [
+          "  const metrics = measureText(\n    boundTextUpdates.text,",
+          "  const metrics = __richMeasure(textElement as any, boundTextUpdates.text) ?? measureText(\n    boundTextUpdates.text,",
+        ],
+        [
+          "        text = wrapText(\n          textElement.originalText,",
+          "        text = __richWrap(textElement as any, textElement.originalText, maxWidth) ?? wrapText(\n          textElement.originalText,",
+        ],
+        [
+          "      const metrics = measureText(\n        text,\n        getFontString(textElement),",
+          "      const metrics = __richMeasure(textElement as any, text) ?? measureText(\n        text,\n        getFontString(textElement),",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/element/src/resizeElements.ts")) {
+      return patch("resizeElements.ts", RICH_LAYOUT_ENTRY, MEASURE, [
+        [
+          "    const text = wrapText(\n      element.originalText,\n      getFontString(element),\n      Math.abs(newWidth),\n    );\n    const metrics = measureText(\n      text,",
+          "    const text = __richWrap(element as any, element.originalText, Math.abs(newWidth)) ?? wrapText(\n      element.originalText,\n      getFontString(element),\n      Math.abs(newWidth),\n    );\n    const metrics = __richMeasure(element as any, text) ?? measureText(\n      text,",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/excalidraw/actions/actionTextAutoResize.ts")) {
+      return patch("actionTextAutoResize.ts", RICH_LAYOUT_ENTRY, MEASURE, [
+        [
+          "    const metrics = measureText(\n      target.originalText,",
+          "    const metrics = __richMeasure(target as any, target.originalText) ?? measureText(\n      target.originalText,",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/element/src/stickyNote.ts")) {
+      return patch("stickyNote.ts", RICH_LAYOUT_ENTRY, ["richFit as __richFit"], [
+        [
+          "    const text = wrapText(originalText, font, maxWidth);\n    return { text, fontSize, ...measureText(text, font, lineHeight) };",
+          "    const __rich = __richFit(textElement as any, originalText, maxWidth, fontSize);\n    if (__rich) {\n      return { fontSize, ...__rich };\n    }\n    const text = wrapText(originalText, font, maxWidth);\n    return { text, fontSize, ...measureText(text, font, lineHeight) };",
+        ],
+      ]);
+    }
+    // duplicating `1. foo` gives `2. foo`: not for formatted text, whose
+    // numbers come from its list (the copy is copied as it is)
+    if (file.endsWith("/packages/element/src/listMarker.ts")) {
+      return patch("listMarker.ts", RICH_LAYOUT_ENTRY, [], [
+        [
+          "    const marker = text && getListItemMarker(text.originalText);",
+          "    const marker =\n      text && !(text as any).customData?.rich && getListItemMarker(text.originalText);",
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/excalidraw/wysiwyg/textWysiwyg.tsx")) {
+      return patch("textWysiwyg.tsx", RICH_EDITOR_ENTRY, ["createRichEditable as __createRichEditable"], [
+        [
+          '  const editable = ownerDocument.createElement("textarea");',
+          "  const editable = __createRichEditable(\n    ownerDocument,\n    element,\n    app,\n    getViewportCoords,\n  ) as unknown as HTMLTextAreaElement;",
+        ],
+        // a click into the text puts the caret where the browser lays it out
+        [
+          "  const getCaretIndexFromInitialSceneCoords = () => {",
+          "  (editable as any).__initialPoint =\n    initialCaretSceneCoords && !initialSelection\n      ? getViewportCoords(initialCaretSceneCoords.x, initialCaretSceneCoords.y)\n      : null;\n  const getCaretIndexFromInitialSceneCoords = () => {",
+        ],
+        [
+          "      if (target instanceof ownerWindow.HTMLTextAreaElement) {",
+          '      if (\n        target instanceof ownerWindow.HTMLElement &&\n        target.closest(".excalidraw-wysiwyg")\n      ) {',
+        ],
+      ]);
+    }
+    if (file.endsWith("/packages/excalidraw/components/App.wheel.ts")) {
+      return patch("App.wheel.ts", RICH_EDITOR_ENTRY, [], [
+        [
+          "      event.target instanceof ownerWindow.HTMLTextAreaElement ||",
+          '      event.target instanceof ownerWindow.HTMLTextAreaElement ||\n      (event.target instanceof ownerWindow.HTMLElement &&\n        !!event.target.closest(".excalidraw-wysiwyg")) ||',
+        ],
+      ]);
+    }
+    return null;
+  },
+});
+
 /**
  * Scene URLs (`/<scene name>`): serve the app for any page path, so the dev
  * server doesn't 404 on names containing dots etc.
@@ -195,7 +347,7 @@ export default async (configEnv: { mode: string; command: string }) => {
 
   return {
     ...config,
-    plugins: [injectScenesPlugin(), textPadding(), sceneUrls(), ...(config.plugins || [])],
+    plugins: [injectScenesPlugin(), textPadding(), richText(), sceneUrls(), ...(config.plugins || [])],
     define: {
       ...config.define,
       "import.meta.env.VITE_APP_SCENES_GIT_REPO": JSON.stringify(

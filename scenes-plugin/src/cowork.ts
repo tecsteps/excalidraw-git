@@ -10,9 +10,19 @@ import {
   serializeAsJSON,
 } from "@excalidraw/excalidraw";
 
-import { hashString } from "@excalidraw/element";
+import {
+  Scene,
+  computeBoundTextPosition,
+  computeContainerDimensionForBoundText,
+  getBoundTextMaxHeight,
+  hashString,
+  refreshTextDimensions,
+  updateBoundElements,
+} from "@excalidraw/element";
 
 import { scenesApi } from "./api";
+import { applyMarkdownUpdate } from "./richText/agent";
+import { placeOnSlides, syncTemplate } from "./slides";
 import { scenesController, withSceneName } from "./controller";
 import { getAgentBaseline, getCheckpoint, setAgentBaseline, setCheckpoint } from "./storage";
 
@@ -115,6 +125,62 @@ export const readOpenScene = async (command: ReadCommand = { type: "read" }) => 
   };
 };
 
+/**
+ * After an edit: labels are wrapped to their shape (which grows if the text
+ * needs it) and centered in it again; arrows bound to moved or resized
+ * shapes follow them — what the editor does when a user does the same.
+ */
+const layoutAfterEdit = (
+  input: ExcalidrawElement[],
+  textChanged: Set<string>,
+  reshaped: Set<string>,
+) => {
+  if (!textChanged.size && !reshaped.size) {
+    return input;
+  }
+  // own copies: the arrow update below mutates elements in place
+  const scene = new Scene(input.map((el) => ({ ...el }) as ExcalidrawElement), { skipValidation: true });
+  const map = scene.getNonDeletedElementsMap();
+  const changedShapes = new Set(reshaped);
+  for (const el of scene.getNonDeletedElements()) {
+    const containerId = (el as any).containerId;
+    const container = containerId && (map.get(containerId) as any);
+    if (el.type !== "text" || !container || container.type === "arrow") {
+      continue;
+    }
+    if (!textChanged.has(el.id) && !reshaped.has(container.id) && !reshaped.has(el.id)) {
+      continue;
+    }
+    let text: any = { ...el, ...(refreshTextDimensions(el as any, container, map) || {}) };
+    if (text.height > getBoundTextMaxHeight(container, text)) {
+      scene.mutateElement(container, {
+        height: (computeContainerDimensionForBoundText as any)(text.height, container.type, container),
+      });
+      changedShapes.add(container.id);
+    }
+    text = { ...text, ...computeBoundTextPosition(container, text, map), frameId: container.frameId ?? null };
+    scene.mutateElement(el as any, {
+      x: text.x,
+      y: text.y,
+      width: text.width,
+      height: text.height,
+      text: text.text,
+      frameId: text.frameId,
+    });
+  }
+  const moved = [...changedShapes].map((id) => map.get(id)).filter(Boolean) as any[];
+  for (const el of moved) {
+    if (el.type !== "text" && el.type !== "arrow" && el.type !== "line") {
+      updateBoundElements(el, scene, { simultaneouslyUpdated: moved });
+    }
+  }
+  return [...scene.getElementsIncludingDeleted()] as ExcalidrawElement[];
+};
+
+/** a deck's slides get their template copies (header, footer, page numbers) */
+export const withTemplate = (elements: ExcalidrawElement[], deck: string) =>
+  syncTemplate(elements, deck)?.elements ?? elements;
+
 /** fields an agent must not set directly */
 const PROTECTED = new Set(["id", "type", "version", "versionNonce", "isDeleted", "index"]);
 
@@ -149,26 +215,73 @@ const applyEdits = async (
 
   // partial updates
   const textUpdated = new Set<string>();
+  /** elements whose geometry changed: their labels and arrows follow */
+  const reshaped = new Set<string>();
+  /** labels for shapes that have none yet (update with `label`) */
+  const newLabels: any[] = [];
   if (command.update?.length) {
     const present = byId();
     const patches = new Map<string, Record<string, unknown>>();
-    for (const { id, ...props } of command.update) {
+    // { id, slide: 3, x, y }: coordinates on slide 3
+    const updates = placeOnSlides(command.update, elements);
+    const labelOf = (id: string) =>
+      elements.find((el) => !el.isDeleted && el.type === "text" && (el as any).containerId === id);
+    for (const { id, ...props } of updates) {
       const el = present.get(id);
       if (!el || el.isDeleted) {
         missing.push(id);
         continue;
       }
-      const patch: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(props)) {
+      const { label: rawLabel, ...rest } = applyMarkdownUpdate(el, props as Record<string, any>);
+      const label = rawLabel && typeof rawLabel === "object" ? applyMarkdownUpdate(labelOf(id) ?? {}, rawLabel) : rawLabel;
+      const patch: Record<string, unknown> = { ...(patches.get(id) || {}) };
+      for (const [key, value] of Object.entries(rest)) {
         if (!PROTECTED.has(key)) {
           patch[key] = value;
+        }
+      }
+      if (label !== undefined && el.type !== "text") {
+        // { label: { text, fontSize, … } } on a shape edits (or creates) its label
+        const spec = typeof label === "string" ? { text: label } : { ...label };
+        delete spec.id;
+        const existing = labelOf(id);
+        if (existing) {
+          patches.set(existing.id, { ...(patches.get(existing.id) || {}), ...spec });
+          if (typeof spec.text === "string") {
+            patches.get(existing.id)!.originalText = spec.text;
+            textUpdated.add(existing.id);
+          } else {
+            reshaped.add(id);
+          }
+        } else if (typeof spec.text === "string") {
+          newLabels.push({ type: "text", id: `${id}-label`, containerId: id, ...spec });
         }
       }
       if (el.type === "text" && typeof patch.text === "string") {
         patch.originalText = patch.text;
         textUpdated.add(el.id);
       }
+      if (["x", "y", "width", "height", "angle", "points"].some((key) => key in patch)) {
+        reshaped.add(id);
+      }
       patches.set(id, patch);
+    }
+    // a moved frame takes its content along (like dragging it in the editor)
+    for (const [id, patch] of [...patches]) {
+      const frame = present.get(id)!;
+      if ((frame.type !== "frame" && frame.type !== "magicframe") || !("x" in patch || "y" in patch)) {
+        continue;
+      }
+      const dx = Number(patch.x ?? frame.x) - frame.x;
+      const dy = Number(patch.y ?? frame.y) - frame.y;
+      for (const child of elements) {
+        const own = patches.get(child.id) || {};
+        const moves = child.frameId === id && !child.isDeleted && !("x" in own) && !("y" in own);
+        if (moves && (dx || dy)) {
+          patches.set(child.id, { ...(patches.get(child.id) || {}), x: child.x + dx, y: child.y + dy });
+          reshaped.add(child.id);
+        }
+      }
     }
     elements = elements.map((el) => {
       const patch = patches.get(el.id);
@@ -192,34 +305,38 @@ const applyEdits = async (
   // additions: converted together with the existing elements, so arrows can
   // bind to shapes that are already on the canvas
   let addedIds: string[] = [];
-  if (command.add?.length) {
+  const toAdd = [...(command.add || []), ...newLabels];
+  if (toAdd.length) {
     const existingIds = new Set(elements.map((el) => el.id));
-    const clash = command.add.filter((el) => existingIds.has(el?.id));
+    const clash = toAdd.filter((el) => existingIds.has(el?.id));
     if (clash.length) {
       throw new Error(
         `Element ids already exist: ${clash.map((el) => el.id).join(", ")} — use update for existing elements or pick new ids`,
       );
     }
     const live = elements.filter((el) => !el.isDeleted);
-    const merged = await convert([...live, ...command.add]);
+    const merged = await convert([...live, ...toAdd]);
     addedIds = merged.filter((el) => !existingIds.has(el.id)).map((el) => el.id);
     const mergedById = new Map(merged.map((el) => [el.id, el]));
 
-    // labels added to shapes that already exist: center them in the shape and
-    // register them on it (convert only does this for shapes created with `label`)
+    // labels added as text with containerId (not via a shape's `label`): center
+    // them in the shape and register them on it (convert only does this for `label`)
     for (const id of addedIds) {
       const label = mergedById.get(id);
       const container = label?.containerId && mergedById.get(label.containerId);
-      if (!label || label.type !== "text" || !container || !existingIds.has(container.id)) {
+      const raw = toAdd.find((el) => el?.id === id);
+      if (!label || label.type !== "text" || !container || raw?.type !== "text") {
         continue;
       }
       mergedById.set(id, {
         ...label,
-        textAlign: label.textAlign ?? "center",
-        verticalAlign: label.verticalAlign ?? "middle",
-        x: container.x + (container.width - label.width) / 2,
-        y: container.y + (container.height - label.height) / 2,
+        // the converter defaults to left / top; labels are centered unless asked otherwise
+        textAlign: raw.textAlign ?? "center",
+        verticalAlign: raw.verticalAlign ?? "middle",
+        // a label lives on its shape's slide
+        frameId: container.frameId ?? null,
       });
+      textUpdated.add(id);
       if (!container.boundElements?.some((b: any) => b.id === id)) {
         mergedById.set(container.id, {
           ...container,
@@ -232,6 +349,8 @@ const applyEdits = async (
       ...merged,
     ].map((el) => mergedById.get(el.id) ?? el);
   }
+
+  elements = layoutAfterEdit(elements, textUpdated, reshaped);
 
   return {
     elements,
@@ -297,7 +416,7 @@ export const editSceneOnGitHub = async (
       command,
       convert,
     );
-    const elements = edit.elements.filter((el) => !el.isDeleted);
+    const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
     const json = withSceneName(
       serializeAsJSON(elements, data.appState || {}, { ...(data.files || {}), ...(command.files || {}) }, "local"),
       command.name, // ties the content to this scene
@@ -372,7 +491,7 @@ export const editLocalScene = async (
     command,
     convert,
   );
-  const elements = edit.elements.filter((el) => !el.isDeleted);
+  const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
   const files = { ...(data.files || {}), ...(command.files || {}) };
   const json = withSceneName(serializeAsJSON(elements, data.appState || {}, files, "local"), command.name);
   await scenesController.writeLocalOnly(command.name, json);

@@ -17,6 +17,7 @@
  * agent works in the user's open tab instead.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +29,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerTools } from "../excalidraw-mcp/dist/server.js";
 
 import { convertInNode, needsConversion } from "./convert.mjs";
+import { markdownOfElement } from "./richText.mjs";
 import { byIds, commonBounds, diffElements, inRegion, summarize, toRect } from "./inspect.mjs";
 import { readEditFile, resolveImages } from "./media.mjs";
 
@@ -232,12 +234,14 @@ const resolveElements = async (input) => {
   );
 };
 
-const toSceneElements = async (elements) => {
-  if (!elements.some(needsConversion)) {
+const toSceneElements = async (elements, deck) => {
+  const isDeck = elements.some((el) => el?.type === "frame" && el.customData?.slides?.role === "template");
+  if (!elements.some(needsConversion) && !isDeck) {
     return { elements, convertedBy: "none" };
   }
   try {
-    const result = await agentCommand({ type: "convert", elements });
+    // a deck's slides get their template copies (header, footer, page numbers)
+    const result = await agentCommand({ type: "convert", elements, ...(deck ? { deck } : {}) });
     return { elements: result.elements, convertedBy: "browser" };
   } catch (error) {
     if (error.status !== 409 && error.status !== 504) {
@@ -270,12 +274,30 @@ const compact = (elements) =>
       }
       out[key] = typeof value === "number" ? Math.round(value * 100) / 100 : value;
     }
+    // formatted text: as the markdown it's written in (not the raw runs)
+    if (el.customData?.rich) {
+      const markdown = markdownOfElement(el);
+      if (markdown !== null) {
+        out.markdown = markdown;
+      }
+      const { rich: _rich, ...customData } = el.customData;
+      if (Object.keys(customData).length) {
+        out.customData = customData;
+      } else {
+        delete out.customData;
+      }
+    }
     return out;
   });
 
 // -----------------------------------------------------------------------------
 // tools
 // -----------------------------------------------------------------------------
+
+/** long id lists cost the agent context: the first ones and a count */
+const ID_LIST_MAX = 30;
+const idList = (ids = []) =>
+  ids.length > ID_LIST_MAX ? [...ids.slice(0, ID_LIST_MAX), `… and ${ids.length - ID_LIST_MAX} more (${ids.length} in all)`] : ids;
 
 const text = (value) => ({
   content: [
@@ -613,7 +635,7 @@ Always returns a checkpointId of the FULL scene. To modify the scene, call creat
         description: `Edit the scene open in the user's app, live and in place — merged with the user's own work (never overwrites their other changes) and undoable by the user as one step (Cmd/Ctrl+Z). This is THE way to co-work on a drawing with the user, and to change any existing scene. It does not push to GitHub and you don't need to: the app's auto-sync pushes about 10 s after the last edit (save_open_scene only when the user asks to push now).
   Safety net: before applying, it checks whether the USER changed the scene since an agent last read/edited it. If so, your edit is still applied, but the result starts with a WARNING listing the user's changes (plus an image of them) — look at them and adjust if your edit conflicts with what the user did. Calling read_open_scene first avoids surprises.
   - add: JSON array string of new elements in create_view format (labels, startBinding/endBinding — arrows may bind to existing elements). Use new unique ids.
-  - update: [{ "id": "...", ...props }] partial updates of existing elements, e.g. move (x, y), resize, recolor, change "text" of a text element (labels are text elements with containerId).
+  - update: [{ "id": "...", ...props }] partial updates of existing elements, e.g. move (x, y), resize, recolor, change "text" of a text element. Like in the editor, a moved / resized shape takes its label and bound arrows along, and a moved frame (slide) takes everything on it. A shape's label: { "id": "box", "label": { "text": "…", "fontSize": 28 } } (changes it or adds one; it is re-wrapped and the shape grows to fit).
   - delete: ids to remove (a container's label goes with it).
   - To label an EXISTING shape, add a text element with "containerId": "<shape id>" (it gets centered in the shape).
   Big edits: put them in a JSON file and pass file (absolute path).
@@ -901,9 +923,9 @@ Returns an IMAGE of the edited area (view=false to skip) and the new revision.`,
           ...(warning ? { warning } : {}),
           ...(changes.count ? { userChanges: changes.report } : {}),
           scene: name,
-          addedIds: edited.addedIds,
-          updated: edited.updated,
-          deleted: edited.deleted,
+          addedIds: idList(edited.addedIds),
+          updated: idList([...new Set(edited.updated)]),
+          deleted: idList(edited.deleted),
           ...(edited.missingIds ? { missingIds: edited.missingIds } : {}),
           revision: local ? edited.revision : edited.sha,
           ...(local
@@ -934,6 +956,7 @@ Returns an IMAGE of the edited area (view=false to skip) and the new revision.`,
     {
       description: `SEE a scene: returns an actual PNG image of it, rendered by Excalidraw itself (no browser automation needed — uses the open app tab or a hidden headless renderer).
 Source (pick one): name = scene in the repo; checkpointId = a create_view/get_scene checkpoint (e.g. to check your drawing before saving); neither = the scene currently open in the user's app, including unsaved edits.
+Slides: slide = slide number (1-based, deck order) or frame id renders exactly that slide as the audience sees it — with the template's header/footer/logo and filled-in {page}/{total}/{deck}; step = what is visible after that many clicks (default: everything). slides = "all" (or "2-5") renders a contact sheet of the whole deck in one image; add steps=true for every click state.
 Focus (optional): elementIds = just those elements (+padding, + whatever overlaps that area) — ideal to check the part you worked on; region = a scene-coordinate rectangle. Without focus the whole scene is rendered; for huge scenes render an overview first (get_scene summary=true tells you where things are), then zoom in with region.
 The result also reports renderedBounds/sceneBounds (scene coordinates) and the scale.`,
       inputSchema: {
@@ -943,10 +966,17 @@ The result also reports renderedBounds/sceneBounds (scene coordinates) and the s
         region: REGION.optional(),
         padding: z.number().optional().describe("Margin around elementIds in scene px (default 80)"),
         maxSize: z.number().optional().describe("Longest side of the image in px (default 1500, max 4000)"),
+        slide: z.union([z.number(), z.string()]).optional().describe("Render just this slide: number (1-based, deck order) or frame id"),
+        step: z.number().optional().describe("With slide / slides: show what is visible after this many clicks"),
+        slides: z
+          .union([z.string(), z.array(z.union([z.number(), z.string()]))])
+          .optional()
+          .describe('Contact sheet: these slides in ONE image ("all", "2-5", [1, 3]), each as presented, labelled with number and title'),
+        steps: z.boolean().optional().describe("With slides: one tile per click step (what the audience sees after 0, 1, 2 … clicks)"),
       },
       annotations: { readOnlyHint: true },
     },
-    tool(async ({ name, checkpointId, elementIds, region, padding, maxSize }) => {
+    tool(async ({ name, checkpointId, elementIds, region, padding, maxSize, slide, step, slides, steps }) => {
       let scene;
       let source;
       if (checkpointId) {
@@ -974,7 +1004,11 @@ The result also reports renderedBounds/sceneBounds (scene coordinates) and the s
         source = `open scene in the app: ${state.current === null ? "Untitled" : `"${state.current}"`}${state.dirty ? " (unsaved edits)" : ""}`;
       }
       const { image, meta } = await renderImage({
-        ...(scene ? { scene } : {}),
+        ...(scene ? { scene, deck: name ?? "Untitled" } : {}),
+        ...(slide !== undefined ? { slide } : {}),
+        ...(step !== undefined ? { step } : {}),
+        ...(slides !== undefined ? { sheet: slides } : {}),
+        ...(steps ? { steps } : {}),
         ...(elementIds?.length ? { elementIds } : {}),
         ...(region ? { region } : {}),
         ...(padding !== undefined ? { padding } : {}),
@@ -983,6 +1017,102 @@ The result also reports renderedBounds/sceneBounds (scene coordinates) and the s
       return {
         content: [image, { type: "text", text: JSON.stringify({ source, ...meta }, null, 2) }],
       };
+    }),
+  );
+
+  server.registerTool(
+    "validate_deck",
+    {
+      description: `CHECK a presentation (a scene with slides) the way a careful reviewer would, measured by Excalidraw itself: lists the slides in deck order (number, frame id, title, click steps, notes) and findings per slide — elements cut off at the slide edge, elements lying on a slide without being part of it (frameId missing: left out of presentations/PDFs), labels that don't fit their shape, overlapping text, text over images, text too small or too low in contrast, click steps that never hide or have gaps, placeholders outside the template, missing speaker notes, wrong slide size.
+Run it after building or changing a deck; fix the findings with edit_scene, then look at the slides you changed with view_scene(slide: n).`,
+      inputSchema: { name: SCENE_NAME },
+      annotations: { readOnlyHint: true },
+    },
+    tool(async ({ name }) => {
+      const { file } = await loadAnyScene(name);
+      if (!file) {
+        throw notFound(name);
+      }
+      const result = await agentCommand({
+        type: "deck-check",
+        elements: file.elements || [],
+        deck: name,
+        background: file.appState?.viewBackgroundColor || "#ffffff",
+      });
+      return text(result);
+    }),
+  );
+
+  server.registerTool(
+    "measure_text",
+    {
+      description: `Measure text BEFORE placing it, exactly as Excalidraw will (real fonts): width and height in px for each item, and with maxWidth the wrapped lines. Use it to size boxes, table cells and chart labels, or to right-align / center text without guessing.
+fontFamily: 5 Excalifont (hand-drawn, default), 6 Nunito, 7 Lilita One, 8 Comic Shanns, 1 Virgil, 2 Helvetica, 3 Cascadia.`,
+      inputSchema: {
+        items: z
+          .array(
+            z.object({
+              text: z.string().optional(),
+              markdown: z.string().optional().describe("formatted text instead of text (see read_me: Formatted text)"),
+              fontSize: z.number().optional().describe("default 20"),
+              fontFamily: z.number().optional(),
+              lineHeight: z.number().optional().describe("default: the font's"),
+              maxWidth: z.number().optional().describe("wrap at this width"),
+            }),
+          )
+          .describe("Texts to measure (up to 200)"),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    tool(async ({ items }) => {
+      if (items.length > 200) {
+        throw new Error("At most 200 items per call");
+      }
+      if (items.some((item) => typeof item.text !== "string" && typeof item.markdown !== "string")) {
+        throw new Error("Each item needs text or markdown");
+      }
+      return text(await agentCommand({ type: "measure", items }));
+    }),
+  );
+
+  server.registerTool(
+    "export_pdf",
+    {
+      description: `Export slides of a presentation scene as a PDF file: one 16:9 page per slide (with the template's header/footer and filled-in page numbers), real selectable text with embedded fonts, pictures embedded once. Only when the user asks for a PDF.
+slides: "all" (default; skipped slides left out unless includeSkipped), or which ones: [1, 3] / "2-4, 7" (1-based, deck order) or frame ids.`,
+      inputSchema: {
+        name: SCENE_NAME,
+        slides: z.union([z.string(), z.array(z.union([z.number(), z.string()]))]).optional().describe('"all" (default), "1, 3-5" or [1, 3]'),
+        includeSkipped: z.boolean().optional(),
+        file: z.string().optional().describe("Absolute path of the PDF to write (default: <scene name>.pdf in the current directory)"),
+      },
+    },
+    tool(async ({ name, slides, includeSkipped, file }) => {
+      const { file: scene } = await loadAnyScene(name);
+      if (!scene) {
+        throw notFound(name);
+      }
+      const { html, slides: exported } = await agentCommand({
+        type: "slides-html",
+        elements: scene.elements || [],
+        files: scene.files || {},
+        deck: name,
+        background: scene.appState?.viewBackgroundColor || "#ffffff",
+        ...(slides !== undefined ? { slides } : {}),
+        ...(includeSkipped ? { includeSkipped } : {}),
+      });
+      const res = await fetch(`${SERVER_URL}/api/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ html }),
+      });
+      if (!res.ok) {
+        throw new Error(`PDF export failed: ${(await res.text()).slice(0, 300)}`);
+      }
+      const pdf = Buffer.from(await res.arrayBuffer());
+      const target = path.resolve(file || path.join(process.cwd(), `${name}.pdf`));
+      await writeFile(target, pdf);
+      return text({ file: target, pages: exported.length, slides: exported, sizeKB: Math.round(pdf.length / 1024) });
     }),
   );
 
@@ -1042,7 +1172,7 @@ ${MODE === "live" ? 'Note: while you draw, every create_view call is mirrored li
         input = parsed.some((el) => el.type === "restoreCheckpoint") ? parsed : [...input, ...parsed];
       }
       const withImages = await resolveImages(await resolveElements(input));
-      const { elements: sceneElements, convertedBy } = await toSceneElements(withImages.elements);
+      const { elements: sceneElements, convertedBy } = await toSceneElements(withImages.elements, name);
 
       const existing = current?.file ?? null;
       const fileIds = new Set(sceneElements.map((el) => el.fileId).filter(Boolean));
@@ -1391,6 +1521,34 @@ const server = new McpServer(
   { name: "Excalidraw", version: "1.0.0" },
   { instructions: INSTRUCTIONS },
 );
+/** read_me also explains what this app adds: images/icons, ER heads, slides */
+const SKILL_EXTRAS = ["## Editing elements", "## Formatted text", "## Slides (presentations)"]
+  .map((heading) => {
+    const start = INSTRUCTIONS.indexOf(heading);
+    const end = INSTRUCTIONS.indexOf("\n## ", start + heading.length);
+    return start < 0 ? "" : INSTRUCTIONS.slice(start, end < 0 ? undefined : end).trim();
+  })
+  .filter(Boolean)
+  .join("\n\n");
+const registerTool = server.registerTool.bind(server);
+server.registerTool = (name, config, handler) =>
+  registerTool(
+    name,
+    config,
+    name === "read_me"
+      ? async (...args) => {
+          const result = await handler(...args);
+          return {
+            ...result,
+            content: [
+              ...result.content,
+              { type: "text", text: `# This Excalidraw's extras (scenes, formatted text, slides, images)\n\n${SKILL_EXTRAS}` },
+            ],
+          };
+        }
+      : handler,
+  );
 registerTools(server, path.join(WORKSPACE, "excalidraw-mcp", "dist"), previewingStore);
+server.registerTool = registerTool;
 registerSceneTools(server);
 await server.connect(new StdioServerTransport());

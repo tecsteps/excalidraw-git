@@ -16,7 +16,7 @@ import {
   getFontString,
   getLineHeight,
 } from "@excalidraw/common";
-import { measureText, syncInvalidIndices } from "@excalidraw/element";
+import { measureText, refreshTextDimensions, syncInvalidIndices, wrapText } from "@excalidraw/element";
 
 import { BASE_URL, TAB_ID, scenesApi } from "./api";
 import { scenesController } from "./controller";
@@ -27,14 +27,22 @@ import {
   readLocalScene,
   readOpenScene,
   saveLocalScene,
+  withTemplate,
 } from "./cowork";
+import { DEFAULT_THEME, placeOnSlides } from "./slides";
+import { checkDeck } from "./deckCheck";
+import { pickSlides, slidesHtml } from "./pdfExport";
 import { renderScene } from "./render";
+import { applyMarkdown } from "./richText/agent";
+import { layoutRich } from "./richText/layout";
+import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
 
 import type { EditCommand, LocalSceneCommand, ReadCommand, SceneEditCommand } from "./cowork";
 
 import type { ClashChoice } from "./merge";
 import type { RenderCommand } from "./render";
+import type { DeckTheme } from "./slides";
 
 type Command =
   | { type: "status" }
@@ -42,7 +50,21 @@ type Command =
   | { type: "create"; name: string }
   | { type: "save"; name?: string }
   | { type: "local-only"; name: string; on: boolean }
-  | { type: "convert"; elements: any[] }
+  | { type: "convert"; elements: any[]; deck?: string }
+  | { type: "deck-check"; elements: any[]; deck: string; background?: string }
+  | {
+      type: "measure";
+      items: Array<{ text: string; fontSize?: number; fontFamily?: number; lineHeight?: number; maxWidth?: number }>;
+    }
+  | {
+      type: "slides-html";
+      elements: any[];
+      files?: any;
+      deck: string;
+      background?: string;
+      slides?: "all" | string | Array<number | string>;
+      includeSkipped?: boolean;
+    }
   | { type: "preview"; elements: any[] }
   | { type: "rename"; name: string; to: string }
   | { type: "delete"; name: string }
@@ -76,7 +98,82 @@ const PSEUDO_TYPES = new Set(["cameraUpdate", "delete", "restoreCheckpoint"]);
  * elements (labels -> bound text, hand-drawn font), so scenes look exactly
  * like what the agent drew.
  */
-const convertMcpElements = async (elements: any[]) => {
+/** the deck theme a scene's template sets (null: no template) */
+const themeOf = (elements: any[]): DeckTheme | null => {
+  const template = elements.find(
+    (el) => el?.type === "frame" && !el.isDeleted && el.customData?.slides?.role === "template",
+  );
+  return template ? { ...DEFAULT_THEME, ...(template.customData.slides.theme || {}) } : null;
+};
+
+/**
+ * In a deck, new text without its own font / color takes the theme's, so it
+ * follows later theme changes like text the user typed
+ */
+const withThemeDefaults = (el: any, theme: DeckTheme | null) => {
+  if (!theme || el.version !== undefined) {
+    return el;
+  }
+  if (el.type === "text") {
+    return { fontFamily: theme.fontFamily, strokeColor: theme.textColor, ...el };
+  }
+  if (el.label?.text !== undefined) {
+    return { ...el, label: { fontFamily: theme.fontFamily, strokeColor: theme.textColor, ...el.label } };
+  }
+  return el;
+};
+
+/** how big text will be, measured like the editor does (fonts loaded) */
+const measureTexts = async (
+  input: Array<{ text?: string; markdown?: string; fontSize?: number; fontFamily?: number; lineHeight?: number; maxWidth?: number }>,
+) => {
+  // formatted text (markdown): laid out as it will show
+  const items = input.map((item) => {
+    if (typeof item.markdown !== "string") {
+      return { ...item, text: item.text ?? "", doc: null };
+    }
+    const doc = docFromMarkdown(item.markdown);
+    return { ...item, text: plainOf(doc), doc };
+  });
+  await Fonts.loadElementsFonts(
+    items.map((item) => ({
+      type: "text",
+      fontFamily: item.fontFamily ?? FONT_FAMILY.Excalifont,
+      text: item.text,
+      originalText: item.text,
+    })) as any,
+  ).catch(() => []);
+  return items.map((item) => {
+    const fontFamily = item.fontFamily ?? FONT_FAMILY.Excalifont;
+    const fontSize = item.fontSize ?? DEFAULT_FONT_SIZE;
+    const font = getFontString({ fontSize, fontFamily } as any);
+    const lineHeight = (item.lineHeight ?? getLineHeight(fontFamily as any)) as any;
+    if (item.doc) {
+      const spec = { fontFamily, fontSize, lineHeight, textAlign: "left" };
+      const layout = layoutRich(spec, item.doc, item.maxWidth ?? null);
+      return {
+        markdown: item.markdown,
+        width: Math.ceil(layout.width),
+        height: Math.ceil(layout.height),
+        lines: layout.text.split("\n").length,
+        ...(item.maxWidth ? { wrapped: layout.text } : {}),
+      };
+    }
+    const text = item.maxWidth ? wrapText(item.text, font, item.maxWidth) : item.text;
+    const size = measureText(text, font, lineHeight);
+    return {
+      text: item.text,
+      width: Math.ceil(size.width),
+      height: Math.ceil(size.height),
+      lines: text.split("\n").length,
+      ...(item.maxWidth ? { wrapped: text } : {}),
+    };
+  });
+};
+
+const convertMcpElements = async (input: any[], { deck }: { deck?: string } = {}) => {
+  const theme = themeOf(input);
+  const elements = placeOnSlides(input.map(applyMarkdown), input).map((el) => (el ? withThemeDefaults(el, theme) : el));
   // text is measured during conversion — the fonts (incl. the characters
   // used) must be loaded, otherwise widths are computed with a fallback font
   // and the text gets cut off in the user's browser
@@ -92,7 +189,13 @@ const convertMcpElements = async (elements: any[]) => {
   await Fonts.loadElementsFonts(textLike as any).catch(() => []);
   const real = elements
     .filter((el) => el && !PSEUDO_TYPES.has(el.type))
-    .map((el) => (el.label?.text && el.version === undefined ? fitLabel(el) : el));
+    .map((el) => (el.label?.text && el.version === undefined ? fitLabel(el) : el))
+    // new frames: their children are the elements naming them in frameId (if not listed)
+    .map((el, _, all) =>
+      (el.type === "frame" || el.type === "magicframe") && el.version === undefined && !Array.isArray(el.children)
+        ? { ...el, children: all.filter((child) => child.frameId === el.id).map((child) => child.id) }
+        : el,
+    );
   // elements that are already complete (e.g. from an existing scene) must not
   // be converted again — that would detach their bound text
   const needsConversion = (el: any) =>
@@ -184,8 +287,49 @@ const convertMcpElements = async (elements: any[]) => {
       }
     }
   }
+  for (const el of result) {
+    const raw = rawById.get(el.id);
+    // labels made from `label` live on their shape's slide
+    if (el.containerId && !raw) {
+      const container = byId.get(el.containerId);
+      if (container && el.frameId !== (container.frameId ?? null)) {
+        el.frameId = container.frameId ?? null;
+      }
+    }
+    if (!raw || !needsConversion(raw)) {
+      continue;
+    }
+    // closed (fillable) lines: the converter drops `polygon`
+    if (el.type === "line" && typeof raw.polygon === "boolean") {
+      el.polygon = raw.polygon;
+    }
+    // formatted text: measured as it shows (the converter measured it as
+    // plain text); with `autoResize: false` it wraps at its width
+    if (el.type === "text" && !el.containerId && el.customData?.rich) {
+      if (raw.autoResize === false && typeof raw.width === "number") {
+        el.autoResize = false;
+        el.width = raw.width;
+        if (typeof raw.x === "number") {
+          el.x = raw.x;
+        }
+      }
+      Object.assign(el, refreshTextDimensions(el, null, byId as any) || {});
+    }
+    // text with a given width: aligned inside that box (the converter would
+    // treat x as the anchor of the alignment and shrink the box to the text)
+    if (el.type === "text" && !el.containerId && el.autoResize !== false && typeof raw.width === "number" && typeof raw.x === "number") {
+      if (el.textAlign === "center") {
+        el.x = raw.x + (raw.width - el.width) / 2;
+      } else if (el.textAlign === "right") {
+        el.x = raw.x + raw.width - el.width;
+      } else {
+        el.x = raw.x;
+      }
+    }
+  }
   syncInvalidIndices(result);
-  return restoreElements(result, null, { repairBindings: true });
+  const restored = restoreElements(result, null, { repairBindings: true });
+  return deck ? withTemplate(restored, deck) : restored;
 };
 
 /**
@@ -306,6 +450,18 @@ const status = () => {
   };
 };
 
+/**
+ * Rendering and measuring share the exporter's state (fonts, image caches):
+ * run them one at a time, else parallel calls can lose elements
+ */
+const EXCLUSIVE = new Set(["render", "deck-check", "slides-html", "measure", "convert"]);
+let exclusiveQueue: Promise<unknown> = Promise.resolve();
+const exclusive = <T,>(task: () => Promise<T>) => {
+  const run = exclusiveQueue.then(task);
+  exclusiveQueue = run.catch(() => {});
+  return run;
+};
+
 /** the agent's edits of one scene must not overtake each other */
 let agentEdits: Promise<unknown> = Promise.resolve();
 
@@ -407,8 +563,20 @@ const runCommand = async (command: Command) => {
         },
         convertMcpElements,
       );
+    case "deck-check":
+      return checkDeck(restoreElements(command.elements, null, { repairBindings: true }), command);
+    case "slides-html": {
+      const elements = restoreElements(command.elements, null, { repairBindings: true });
+      const frames = pickSlides(elements, command.slides ?? "all", { includeSkipped: command.includeSkipped });
+      return {
+        html: await slidesHtml(elements, command.files || {}, frames, command),
+        slides: frames.map((frame) => frame.name ?? frame.id),
+      };
+    }
+    case "measure":
+      return { results: await measureTexts(command.items) };
     case "convert":
-      return { elements: await convertMcpElements(command.elements) };
+      return { elements: await convertMcpElements(command.elements, { deck: command.deck }) };
     default:
       throw new Error(`Unknown command: ${(command as any).type}`);
   }
@@ -448,7 +616,7 @@ export const connectLive = () => {
     if (event.type === "command") {
       try {
         await scenesController.ready;
-        const result = await runCommand(event.command);
+        const result = await (EXCLUSIVE.has(event.command.type) ? exclusive(() => runCommand(event.command)) : runCommand(event.command));
         scenesApi.sendResult(event.id, { ok: true, result });
       } catch (error: any) {
         scenesApi.sendResult(event.id, { ok: false, error: error.message });

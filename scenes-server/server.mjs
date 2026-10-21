@@ -593,6 +593,50 @@ const ensureRenderer = async ({ dedicated = false } = {}) => {
   }
 };
 
+// -----------------------------------------------------------------------------
+// PDF: slides arrive as one HTML page of SVGs (real text, embedded fonts) and
+// are printed by headless Chrome, so the PDF keeps text as text
+// -----------------------------------------------------------------------------
+
+/** what the printed page may do: nothing but show its inline content */
+const PDF_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'">`;
+
+const printPdf = async (html) => {
+  const chrome = CHROME_CANDIDATES.find((candidate) => existsSync(candidate));
+  if (!chrome) {
+    const error = new Error("No Chrome found to print the PDF (set CHROME_PATH)");
+    error.status = 409;
+    throw error;
+  }
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "excalidraw-scenes-pdf-"));
+  try {
+    const page = path.join(dir, "slides.html");
+    const out = path.join(dir, "slides.pdf");
+    await fs.writeFile(page, html);
+    await new Promise((resolve, reject) =>
+      execFile(
+        chrome,
+        [
+          "--headless=new",
+          `--user-data-dir=${path.join(dir, "profile")}`,
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-gpu",
+          "--no-pdf-header-footer",
+          "--virtual-time-budget=15000",
+          `--print-to-pdf=${out}`,
+          `file://${page}`,
+        ],
+        { timeout: 120000 },
+        (error) => (error && !existsSync(out) ? reject(error) : resolve()),
+      ),
+    );
+    return await fs.readFile(out);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+
 const stopRenderer = () => {
   if (renderer) {
     renderer.proc.kill();
@@ -761,6 +805,24 @@ const server = http.createServer(async (req, res) => {
       const command = await readJson(req);
       const result = await sendCommand(command);
       return send(res, 200, { ok: true, result });
+    }
+    if (url.pathname === "/api/pdf" && req.method === "POST") {
+      // JSON body: cross-site pages can't send it without CORS approval
+      if (!String(req.headers["content-type"] || "").startsWith("application/json")) {
+        return send(res, 415, { error: "Send JSON" });
+      }
+      const { html } = await readJson(req);
+      // the page must forbid scripts and network (CSP set by the app's export)
+      if (typeof html !== "string" || !html.startsWith("<!doctype html>") || !html.includes(PDF_CSP)) {
+        return send(res, 400, { error: "Expected { html }" });
+      }
+      const pdf = await printPdf(html);
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Length": pdf.length,
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+      });
+      return res.end(pdf);
     }
     const resultMatch = url.pathname.match(/^\/api\/app\/result\/(\w+)$/);
     if (resultMatch && req.method === "POST") {
