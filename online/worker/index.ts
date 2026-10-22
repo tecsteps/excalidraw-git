@@ -54,6 +54,83 @@ const withCors = (response: Response) => {
   return next;
 };
 
+/** images an agent uploads: at most this big (the tab keeps them, the scene file carries them) */
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/** the image type, from the file's first bytes (agents often send no or a wrong Content-Type) */
+const imageType = (bytes: Uint8Array): string | null => {
+  const starts = (...values: number[]) => values.every((value, i) => bytes[i] === value);
+  if (starts(0x89, 0x50, 0x4e, 0x47)) return "image/png";
+  if (starts(0xff, 0xd8, 0xff)) return "image/jpeg";
+  if (starts(0x47, 0x49, 0x46, 0x38)) return "image/gif";
+  if (starts(0x52, 0x49, 0x46, 0x46) && String.fromCharCode(...bytes.subarray(8, 12)) === "WEBP") return "image/webp";
+  const head = new TextDecoder().decode(bytes.subarray(0, 1024)).trimStart().toLowerCase();
+  if (head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"))) return "image/svg+xml";
+  return null;
+};
+
+/**
+ * POST /mcp/<key>/upload with an image file as the body (curl --data-binary
+ * @file.png): the image goes straight to the user's Kurviq tab (nothing is
+ * stored here), which answers with its fileId. The agent then adds
+ * { "type": "image", "fileId": "…" } to a scene. The image's bytes never
+ * pass through the model.
+ */
+const handleUpload = async (request: Request, env: Env, key: string) => {
+  const answer = (status: number, body: unknown) =>
+    withCors(new Response(JSON.stringify(body, null, 2), { status, headers: { "Content-Type": "application/json" } }));
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS });
+  }
+  if (!KEY_RE.test(key)) {
+    return answer(404, { error: "Unknown agent link" });
+  }
+  if (request.method !== "POST") {
+    return answer(405, { error: "POST the image file as the request body: curl --data-binary @image.png <this URL>" });
+  }
+  if (Number(request.headers.get("Content-Length") || 0) > MAX_UPLOAD_BYTES) {
+    return answer(413, { error: `At most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB per image (use JPEG or WebP for photos)` });
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_UPLOAD_BYTES) {
+    return answer(bytes.length ? 413 : 400, {
+      error: bytes.length ? `At most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB per image` : "Empty body: send the image file as the request body (curl --data-binary @image.png)",
+    });
+  }
+  const mimeType = imageType(bytes);
+  if (!mimeType) {
+    return answer(415, { error: "Not an image: PNG, JPEG, GIF, WebP or SVG" });
+  }
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes));
+  const id = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  const stub = await pairingStub(env, key);
+  const res = await stub.fetch(
+    new Request("https://pairing/api/app/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Kurviq-App": new URL(request.url).origin },
+      body: JSON.stringify({ type: "upload", file: { id, mimeType, dataURL: `data:${mimeType};base64,${btoa(binary)}` } }),
+    }),
+  );
+  const body = (await res.json().catch(() => ({}))) as { result?: { fileId: string; width: number; height: number }; error?: string };
+  if (!res.ok || !body.result) {
+    return answer(res.status >= 400 ? res.status : 502, {
+      error: body.error || "The Kurviq tab did not take the image. Is Kurviq open in the browser this agent link was made in?",
+    });
+  }
+  const { fileId, width, height } = body.result;
+  return answer(200, {
+    fileId,
+    mimeType,
+    width,
+    height,
+    use: `Add it with edit_scene (or save_scene): { "type": "image", "id": "<your id>", "x": 0, "y": 0, "width": ${Math.min(width, 1200)}, "fileId": "${fileId}" } (width or height alone keeps the aspect ratio).`,
+  });
+};
+
 /** tools that work without the user's tab (everything else runs there) */
 const WITHOUT_TAB = new Set(["read_me"]);
 
@@ -101,7 +178,7 @@ const handleMcp = async (request: Request, env: Env, key: string) => {
     mode: "detached",
     appHint: app,
     githubOptional: true,
-    skill: kurviqSkill(app),
+    skill: kurviqSkill(app, `${app}/mcp/${key}/upload`),
     unreachable,
     serverFetch: (pathname: string, init: RequestInit = {}) => {
       const headers = new Headers(init.headers);
@@ -147,6 +224,11 @@ export default {
       }
       const stub = await pairingStub(env, live[1]);
       return stub.fetch(new Request(`https://pairing/live${url.search}`, request));
+    }
+
+    const upload = url.pathname.match(/^\/mcp\/([^/]+)\/upload\/?$/);
+    if (upload) {
+      return handleUpload(request, env, upload[1]);
     }
 
     const mcp = url.pathname.match(/^\/mcp(?:\/([^/]*))?\/?$/);

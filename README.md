@@ -61,6 +61,11 @@ install:
   and its edits are merged with yours. The tab must be open while the agent
   works. Treat the link like a password; **Make a new link** replaces it.
   Agents find everything they need at <https://kurviq.com/llms.txt>.
+  Images from the agent's machine (illustrations, screenshots): the agent
+  uploads them with `curl --data-binary @image.png
+  https://kurviq.com/mcp/<key>/upload` and adds them by the `fileId` it
+  gets back; the Worker passes the file straight to the tab (nothing is
+  stored), and the image's bytes never go through the model.
 
 - **Teams (spaces):** install the Kurviq app on a GitHub organization and
   its members share `<org>/kurviq-scenes`. Switch spaces in the Scenes

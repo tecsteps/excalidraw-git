@@ -356,7 +356,7 @@ export const createScenesMcp = ({
     .optional()
     .describe('Absolute path of a JSON file with { "add": [...], "update": [...], "delete": [...] } (or just an array = add). Use it for big edits instead of pasting JSON.');
 
-  const IMAGES_HELP = `Images and icons: add { "type": "image", "id": "...", "x": 0, "y": 0, "width": 48, plus ONE of "src" (absolute file path, http(s) URL or data URL of a png/jpg/gif/webp/svg), "svg" (inline SVG markup) or "icon" ("lucide:<name>", e.g. "lucide:database", or "simple-icons:<slug>", e.g. "simple-icons:github"; "color" tints it) }. width or height alone keeps the aspect ratio.
+  const IMAGES_HELP = `Images and icons: add { "type": "image", "id": "...", "x": 0, "y": 0, "width": 48, plus ONE of "src" (absolute file path, http(s) URL or data URL of a png/jpg/gif/webp/svg), "svg" (inline SVG markup) or "icon" ("lucide:<name>", e.g. "lucide:database", or "simple-icons:<slug>", e.g. "simple-icons:github"; "color" tints it), or (Kurviq online) "fileId" of an image you uploaded (read_me: "Images from your machine") }. width or height alone keeps the aspect ratio.
   Labels: label { text, strokeColor, fontSize, fontFamily, textAlign, verticalAlign } — the text is dark (#1e1e1e) unless you set strokeColor; the label's id is "<shape id>-label"; a shape grows so that no word of its label is broken.`;
 
   const registerSceneTools = (server) => {

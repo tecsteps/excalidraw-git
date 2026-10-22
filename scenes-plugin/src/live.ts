@@ -38,6 +38,7 @@ import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
 import { customFonts, fontFamilyValue } from "./fonts";
+import { keepUpload, withUploads } from "./uploads";
 import { createReceiver, sendMessage } from "./online/frames";
 import { connection } from "./online/github";
 import { pairing } from "./online/pairing";
@@ -91,7 +92,8 @@ type Command =
   | ReadCommand
   | EditCommand
   /** online: a request of the remote MCP to "the scenes server" (served by this tab) */
-  | { type: "http"; request: import("./online/tabServer").TabRequest };
+  | { type: "http"; request: import("./online/tabServer").TabRequest }
+  | { type: "upload"; file: { id: string; mimeType: string; dataURL: string } };
 
 /** hidden headless tab started by the scenes server, only renders/converts */
 export const IS_RENDERER = new URLSearchParams(window.location.search).has(
@@ -513,11 +515,54 @@ const refuseIfReadOnly = (name: string | null | undefined) => {
 /** the agent's edits of one scene must not overtake each other */
 let agentEdits: Promise<unknown> = Promise.resolve();
 
+/** a scene file (JSON) whose image elements may name uploaded files: they go into its files */
+const sceneJsonWithUploads = async (json: string) => {
+  let data: any;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    return json;
+  }
+  if (!Array.isArray(data?.elements) || !data.elements.some((el: any) => el?.type === "image" && el.fileId)) {
+    return json;
+  }
+  const { elements, files } = await withUploads(data.elements, data.files || {});
+  return JSON.stringify({ ...data, elements, files });
+};
+
+/**
+ * Images an agent uploaded (kurviq.com/mcp/<key>/upload) are referenced by
+ * fileId: whatever the command, the file comes along from this tab's uploads.
+ */
+const attachUploads = async (command: any) => {
+  if (Array.isArray(command.add)) {
+    const { elements, files } = await withUploads(command.add, command.files || {});
+    command.add = elements;
+    command.files = files;
+  }
+  if (command.type === "convert" && Array.isArray(command.elements)) {
+    command.elements = (await withUploads(command.elements)).elements;
+  }
+  if (command.type === "local-save" && typeof command.json === "string") {
+    command.json = await sceneJsonWithUploads(command.json);
+  }
+  if (command.type === "http" && command.request?.method === "PUT" && typeof command.request.body === "string") {
+    command.request = { ...command.request, body: await sceneJsonWithUploads(command.request.body) };
+  }
+};
+
 const runCommand = async (command: Command) => {
   if (Array.isArray((command as any).update)) {
     (command as any).update = (command as any).update.map(withFontIds);
   }
+  await attachUploads(command);
   switch (command.type) {
+    case "upload": {
+      // an image the agent uploaded: kept in this tab until a scene uses it
+      const file = await keepUpload((command as any).file);
+      scenesController.getApi()?.addFiles([{ id: file.id, mimeType: file.mimeType, dataURL: file.dataURL, created: file.created } as any]);
+      return { fileId: file.id, mimeType: file.mimeType, width: file.width, height: file.height };
+    }
     case "flush":
       return scenesController.flush(command.name);
     case "scene-edit": {

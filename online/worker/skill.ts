@@ -30,9 +30,31 @@ const TROUBLESHOOTING = (app: string) => `## Troubleshooting
   in the browser the agent link was made in (MCP button, top left).
 - "GitHub is not connected": the user can connect it in the Scenes sidebar;
   until then, work with local-only scenes.
-- Local file paths (images, edit files) and PDF export are not available
-  through the Kurviq MCP: pass images as http(s) or data URLs; the user
-  exports PDFs in Kurviq (Slides sidebar → PDF).
+- Local file paths (edit files, image src) and PDF export are not available
+  through the Kurviq MCP: upload images (see "Images from your machine"); the
+  user exports PDFs in Kurviq (Slides sidebar → PDF).
+`;
+
+const UPLOADS = (uploadUrl: string) => `## Images from your machine (photos, illustrations, screenshots)
+
+Kurviq's MCP runs on kurviq.com, so it can't read your files, and a data
+URL would push the whole image through your context. Upload the file
+instead, then refer to it by its fileId:
+
+\`\`\`
+curl -s --data-binary @/path/to/image.png ${uploadUrl}
+→ { "fileId": "3f7a…", "width": 1600, "height": 900, … }
+\`\`\`
+
+Then \`edit_scene\` (or \`save_scene\`) with
+\`{ "type": "image", "id": "hero", "x": 0, "y": 0, "width": 960, "fileId": "3f7a…" }\`
+(\`width\` or \`height\` alone keeps the aspect ratio; on a slide add
+\`"slide": 3\`). PNG, JPEG, GIF, WebP or SVG, up to 10 MB; prefer JPEG or
+WebP for photos (the scene file carries the image). The upload goes straight
+to the user's open Kurviq tab, which keeps it until a scene uses it (the same
+fileId can be used on many slides). http(s) URLs as \`src\` work too.
+This upload URL is the one HTTP call you make yourself; everything else goes
+through the tools.
 `;
 
 const section = (text: string, heading: string) => {
@@ -44,7 +66,7 @@ const section = (text: string, heading: string) => {
   return [start, end < 0 ? text.length : end + 1] as const;
 };
 
-export const kurviqSkill = (app: string) => {
+export const kurviqSkill = (app: string, uploadUrl = `${app}/mcp/<your key>/upload`) => {
   let text = String(localSkill).replace(/^---[\s\S]*?---\s*/, "");
   const intro = text.indexOf("## Golden rules");
   text = INTRO(app) + text.slice(intro);
@@ -61,5 +83,5 @@ export const kurviqSkill = (app: string) => {
     .replace(/\s*\(localhost:3101\)/g, "")
     .replace(/the scenes server's HTTP API/g, "Kurviq's or GitHub's HTTP API")
     .replace(/absolute file path,\s+/g, "");
-  return `${text.trimEnd()}\n\n${TROUBLESHOOTING(app)}`;
+  return `${text.trimEnd()}\n\n${UPLOADS(uploadUrl)}\n${TROUBLESHOOTING(app)}`;
 };
