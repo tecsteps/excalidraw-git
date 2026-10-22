@@ -1036,7 +1036,7 @@ export const createScenesMcp = ({
       "measure_text",
       {
         description: `Measure text BEFORE placing it, exactly as Excalidraw will (real fonts): width and height in px for each item, and with maxWidth the wrapped lines. Use it to size boxes, table cells and chart labels, or to right-align / center text without guessing.
-  fontFamily: 5 Excalifont (hand-drawn, default), 6 Nunito, 7 Lilita One, 8 Comic Shanns, 1 Virgil, 2 Helvetica, 3 Cascadia, or the name of a font the user added (app_status → customFonts, e.g. "Geist").`,
+  fontFamily: 5 Excalifont (hand-drawn, default), 6 Nunito, 7 Lilita One, 8 Comic Shanns, 1 Virgil, 2 Helvetica, 3 Cascadia, or the name of any Google font (e.g. "Inter", added on first use) or of a font in app_status → customFonts.`,
         inputSchema: {
           items: z
             .array(
@@ -1331,6 +1331,16 @@ export const createScenesMcp = ({
       tool(async ({ name, create }) =>
         text(await appCommand({ type: create ? "create" : "open", name })),
       ),
+    );
+
+    server.registerTool(
+      "add_font",
+      {
+        description:
+          'Add a font from Google Fonts (fonts.google.com) by its exact name, e.g. "Inter", "Geist", "JetBrains Mono", to the user\'s app, so texts can use it with "fontFamily": "Inter" (also in labels and the deck theme). The font then travels with every scene that uses it. Using a Google font name in fontFamily adds it automatically too; this tool is for adding it ahead (e.g. to measure text). Needs the app open.',
+        inputSchema: { name: z.string().describe('Font family name as on fonts.google.com, e.g. "Inter"') },
+      },
+      tool(async ({ name }) => text(await appCommand({ type: "add-font", name }))),
     );
 
     server.registerTool(

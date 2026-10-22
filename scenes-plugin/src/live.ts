@@ -37,7 +37,7 @@ import { applyMarkdown } from "./richText/agent";
 import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
-import { customFonts, fontFamilyValue } from "./fonts";
+import { addFont, customFonts, fontFamilyValue, fontFromGoogle } from "./fonts";
 import { keepUpload, withUploads } from "./uploads";
 import { createReceiver, sendMessage } from "./online/frames";
 import { connection } from "./online/github";
@@ -93,7 +93,8 @@ type Command =
   | EditCommand
   /** online: a request of the remote MCP to "the scenes server" (served by this tab) */
   | { type: "http"; request: import("./online/tabServer").TabRequest }
-  | { type: "upload"; file: { id: string; mimeType: string; dataURL: string } };
+  | { type: "upload"; file: { id: string; mimeType: string; dataURL: string } }
+  | { type: "add-font"; name: string };
 
 /** hidden headless tab started by the scenes server, only renders/converts */
 export const IS_RENDERER = new URLSearchParams(window.location.search).has(
@@ -178,6 +179,59 @@ const measureTexts = async (
       ...(item.maxWidth ? { wrapped: text } : {}),
     };
   });
+};
+
+/** the font names (not numbers) an agent used in an element: its own, its label's, a deck theme's */
+const fontNamesOf = (el: any): string[] =>
+  [el?.fontFamily, el?.label?.fontFamily, el?.customData?.slides?.theme?.fontFamily].filter(
+    (value): value is string => typeof value === "string",
+  );
+
+/**
+ * Fonts an agent names that this tab doesn't know yet are fetched from
+ * Google Fonts (like "Add font…" in the font picker), so agents can use any
+ * Google font without the user adding it first. A name that isn't there
+ * is a clear error instead of a broken text.
+ */
+const ensureFonts = async (command: any) => {
+  const elements: any[] = [
+    ...(Array.isArray(command.add) ? command.add : []),
+    ...(Array.isArray(command.update) ? command.update : []),
+    ...(Array.isArray(command.elements) ? command.elements : []),
+    ...(Array.isArray(command.items) ? command.items : []),
+  ];
+  for (const json of [command.json, command.request?.method === "PUT" ? command.request.body : null]) {
+    if (typeof json === "string" && json.includes('"fontFamily": "') ) {
+      try {
+        elements.push(...(JSON.parse(json).elements || []));
+      } catch {}
+    }
+  }
+  const missing = new Set(
+    elements.flatMap(fontNamesOf).filter((name) => typeof fontFamilyValue(name) === "string"),
+  );
+  for (const name of missing) {
+    try {
+      await addFont(await fontFromGoogle(name, { online: IS_ONLINE }));
+    } catch (error: any) {
+      throw new Error(
+        `Font "${name}": ${error.message}. Use a font from fonts.google.com by its exact name, one of app_status → customFonts, or Excalidraw's own (Excalifont, Nunito, Helvetica …). A font file must be added by the user (font picker → "Add font…" → Font file).`,
+      );
+    }
+  }
+};
+
+/** a scene file (JSON) from an agent: font names become numbers */
+const sceneJsonWithFontIds = (json: string) => {
+  if (!json.includes('"fontFamily": "') && !json.includes('"fontFamily":"')) {
+    return json;
+  }
+  try {
+    const data = JSON.parse(json);
+    return JSON.stringify({ ...data, elements: (data.elements || []).map(withFontIds) });
+  } catch {
+    return json;
+  }
 };
 
 /** an agent may name a font ("Geist") where Excalidraw stores its number */
@@ -544,19 +598,36 @@ const attachUploads = async (command: any) => {
     command.elements = (await withUploads(command.elements)).elements;
   }
   if (command.type === "local-save" && typeof command.json === "string") {
-    command.json = await sceneJsonWithUploads(command.json);
+    command.json = sceneJsonWithFontIds(await sceneJsonWithUploads(command.json));
   }
   if (command.type === "http" && command.request?.method === "PUT" && typeof command.request.body === "string") {
-    command.request = { ...command.request, body: await sceneJsonWithUploads(command.request.body) };
+    command.request = { ...command.request, body: sceneJsonWithFontIds(await sceneJsonWithUploads(command.request.body)) };
   }
 };
 
 const runCommand = async (command: Command) => {
+  await ensureFonts(command);
   if (Array.isArray((command as any).update)) {
     (command as any).update = (command as any).update.map(withFontIds);
   }
+  if (Array.isArray((command as any).items)) {
+    (command as any).items = (command as any).items.map(withFontIds);
+  }
   await attachUploads(command);
   switch (command.type) {
+    case "add-font": {
+      const name = String((command as any).name || "").trim();
+      const known = customFonts.byName(name);
+      if (!known) {
+        await ensureFonts({ add: [{ type: "text", fontFamily: name }] });
+      }
+      return {
+        added: customFonts.byName(name)?.family ?? name,
+        alreadyThere: !!known,
+        use: `"fontFamily": "${customFonts.byName(name)?.family ?? name}"`,
+        customFonts: customFonts.list().map((font) => font.family),
+      };
+    }
     case "upload": {
       // an image the agent uploaded: kept in this tab until a scene uses it
       const file = await keepUpload((command as any).file);
