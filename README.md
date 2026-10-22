@@ -32,12 +32,21 @@ install:
   dialog).
 - **Connect GitHub** (optional) to sync your scenes with a repository, on all
   your devices and with other people:
-  Click **Connect GitHub** (welcome screen, scene menu or Scenes sidebar)
-  and allow the Kurviq app for your account on GitHub. Back in Kurviq,
-  your scenes sync with the private repository `<your account>/kurviq-scenes`
-  (Kurviq creates it if it doesn't exist; your existing scenes come along).
+  Click **Connect GitHub** (welcome screen, scene menu or Scenes sidebar):
+  it signs you in with GitHub (once Kurviq is allowed, GitHub sends you
+  straight back). A checklist then shows only what is still missing:
+  1. **Create `<you>/kurviq-scenes`**: GitHub's form opens filled in
+     (private), one click on "Create repository" ("I already have it" skips
+     this; GitHub doesn't tell Kurviq about a repository it may not see yet).
+  2. **Give Kurviq access to it**: the Kurviq app's installation page on
+     GitHub, once per account ("Only select repositories" → kurviq-scenes).
+  3. Sync is on; scenes from this browser come along.
+
   Kurviq gets access to the files of the repositories you allow, nothing
-  else. Already set up on another device? **Sign in** instead.
+  else: the app has no administration rights, so it never creates or
+  deletes repositories itself. A browser that synced with an older
+  repository is offered a move to `kurviq-scenes` (its scenes are copied;
+  the old repository stays as it is).
 
   Scenes are stored as `scenes/<name>.excalidraw`, pushed about 10 s after
   you stop drawing; changes by others arrive within a minute and are merged

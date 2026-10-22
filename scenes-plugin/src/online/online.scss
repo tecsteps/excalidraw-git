@@ -304,3 +304,53 @@
   text-align: center;
   pointer-events: none;
 }
+
+// setting up sync: the steps, as a checklist
+.excalidraw .kq-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  .kq-steps__item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--color-gray-50);
+  }
+
+  .kq-steps__mark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    border-radius: 50%;
+    border: 1px solid var(--default-border-color);
+    font-size: 0.75rem;
+  }
+
+  .kq-steps__item--done {
+    color: var(--text-primary-color);
+
+    .kq-steps__mark {
+      border-color: #2f9e44;
+      background: #2f9e44;
+      color: #fff;
+    }
+  }
+
+  .kq-steps__item--now {
+    color: var(--text-primary-color);
+    font-weight: 600;
+
+    .kq-steps__mark {
+      border-color: var(--color-primary);
+      background: var(--color-primary);
+      color: #fff;
+    }
+  }
+}

@@ -112,9 +112,6 @@ const requestToken = async (): Promise<string | null> => {
     return null;
   }
   token = { value: body.token, expiresAt: Date.parse(body.expiresAt) };
-  try {
-    localStorage.setItem(USED_KEY, "1");
-  } catch {}
   if (state.user?.login !== body.user?.login) {
     setConnection({ user: body.user, error: null });
   }
@@ -148,29 +145,24 @@ export const checkConnection = async () => {
   return state;
 };
 
-/** set once this browser was connected: from then on "Connect GitHub" just signs in */
-const USED_KEY = "kurviq-github-used";
 /** this tab went to GitHub to connect (sessionStorage) */
 export const CONNECTING_KEY = "kurviq-connecting";
 
 /**
- * Sign in with GitHub (full page redirect, back to this page afterwards).
- * "install": the Kurviq app's installation (GitHub asks which repositories,
- * once per account). By default a browser that was connected before only
- * signs in: the installation exists, and GitHub would show its settings page
- * again; if it is missing after all, the setup dialog sends the user there.
+ * Go to GitHub (full page redirect, back to this page afterwards).
+ *   "login" (Connect GitHub): just signs in. Once Kurviq is allowed, GitHub
+ *     sends the user straight back; the setup dialog then shows what is
+ *     still missing.
+ *   "install": the Kurviq app's installation page, where GitHub asks which
+ *     repositories Kurviq may use (once per account).
  */
-export const connectGitHub = (mode?: "login" | "install") => {
-  let used = false;
-  try {
-    used = !!localStorage.getItem(USED_KEY) || !!localStorage.getItem(REPO_KEY);
-  } catch {}
+export const connectGitHub = (mode: "login" | "install" = "login") => {
   const back = window.location.pathname + window.location.search;
   try {
     // the answer (?github=connected) only counts in the tab that asked
     sessionStorage.setItem(CONNECTING_KEY, String(Date.now()));
   } catch {}
-  window.location.href = `/auth/${mode ?? (used ? "login" : "install")}?return=${encodeURIComponent(back)}`;
+  window.location.href = `/auth/${mode}?return=${encodeURIComponent(back)}`;
 };
 
 /** the other tabs of this browser hear about a disconnect */
@@ -974,6 +966,29 @@ const createRepo = async (
 
 /** create <owner>/kurviq-scenes (private) */
 export const createScenesRepo = (owner: string) => createRepo(owner, SCENES_REPO, { private: true });
+
+/**
+ * Copy the scenes of an old scenes repository into the new one (the ones
+ * it doesn't have yet); returns how many were copied. The old repository
+ * stays as it is.
+ */
+export const copyScenes = async (from: RepoChoice, to: RepoChoice) => {
+  const [source, target] = await Promise.all([fetchListing(from, true), fetchListing(to, true)]);
+  let copied = 0;
+  for (const [name, sha] of source.blobs) {
+    if (target.blobs.has(name)) {
+      continue;
+    }
+    const bytes = new TextEncoder().encode(await readBlob(from, name, sha));
+    const res = await putFile(to, scenePath(name), bytes, `Add scene: ${name} (from ${from.owner}/${from.name})`);
+    if (res.status !== 201 && res.status !== 200) {
+      fail(res, `Could not copy "${name}"`);
+    }
+    copied++;
+  }
+  listings.clear();
+  return copied;
+};
 
 // -----------------------------------------------------------------------------
 // someone's shared scene (kurviq.com/@owner/scene): public without sign-in,
