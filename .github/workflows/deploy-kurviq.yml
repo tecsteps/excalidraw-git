@@ -1,0 +1,63 @@
+# Deploys Kurviq (https://kurviq.com) from this repository: every push to
+# main builds the online app and the Worker and deploys them to Cloudflare.
+# Repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID. The
+# Worker's own secrets (GITHUB_CLIENT_SECRET, COOKIE_KEY) live on Cloudflare
+# and are kept by deploys (see README, "Running Kurviq yourself").
+name: Deploy Kurviq
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-kurviq
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # yarn (excalidraw) and pnpm (excalidraw-mcp)
+      - run: corepack enable
+
+      # the upstream checkouts at the pinned commits, with their dependencies
+      - uses: actions/cache@v4
+        with:
+          path: |
+            excalidraw
+            excalidraw-mcp
+          key: upstream-${{ runner.os }}-${{ hashFiles('scripts/setup.mjs') }}
+
+      - name: Set up upstream (clone at pinned commits, install, build)
+        run: npm run setup
+
+      - name: Install Worker tooling
+        run: npm ci
+        working-directory: online
+
+      - name: Build the app
+        run: npm run build:online
+
+      - name: Build and deploy the Worker
+        run: npm run deploy
+        working-directory: online
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Check the live site
+        run: |
+          sleep 10
+          curl -fsS -o /dev/null https://kurviq.com/
+          curl -fsS https://kurviq.com/llms.txt | head -1

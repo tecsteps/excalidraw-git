@@ -81,7 +81,11 @@ the Worker (`worker/`), `wrangler.jsonc` and `llms.txt`.
   `http://localhost:8787/auth/callback`), "Request user authorization
   (OAuth) during installation" on, user token expiry on, webhook off,
   repository permission Contents: read and write. No private key needed.
-- Deploy: `cd online && npm install`, set the secrets once with
+- kurviq.com is deployed by GitHub Actions
+  ([`.github/workflows/deploy-kurviq.yml`](.github/workflows/deploy-kurviq.yml))
+  on every push to `main`, with the repository secrets `CLOUDFLARE_API_TOKEN`
+  and `CLOUDFLARE_ACCOUNT_ID`; don't deploy it from a local machine.
+- Your own deployment: `cd online && npm install`, set the secrets once with
   `npx wrangler secret put GITHUB_CLIENT_SECRET` and
   `npx wrangler secret put COOKIE_KEY` (value: `openssl rand -base64 32`),
   adjust `vars` and `routes` in `wrangler.jsonc`, then `npm run deploy:online`
