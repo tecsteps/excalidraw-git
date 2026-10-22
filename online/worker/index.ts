@@ -178,6 +178,23 @@ export default {
     if (publicApi) {
       return publicApi;
     }
-    return (await handleSharedPage(request, env.ASSETS, ctx)) ?? env.ASSETS.fetch(request);
+    const page = await handleSharedPage(request, env.ASSETS, ctx);
+    if (page) {
+      return page;
+    }
+    // Excalidraw's font subsetting (SVG / PDF export) runs in a worker whose
+    // Emscripten code builds functions with new Function: only that worker gets
+    // 'unsafe-eval' (a thread of its own, it only ever sees font files); the
+    // page keeps its strict policy
+    if (/^\/assets\/subset-worker\.chunk-[\w-]+\.js$/.test(url.pathname)) {
+      const asset = await env.ASSETS.fetch(request);
+      const response = new Response(asset.body, asset);
+      response.headers.set(
+        "Content-Security-Policy",
+        "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; connect-src 'self' data:",
+      );
+      return response;
+    }
+    return env.ASSETS.fetch(request);
   },
 };
