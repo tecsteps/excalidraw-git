@@ -29,8 +29,8 @@ type Pending = {
   resolve: (value: any) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
-  /** the tab the command was sent to */
-  ws: WebSocket;
+  /** the tab the command was sent to (its id: WebSocket objects aren't the same after hibernation) */
+  tab: string;
 };
 
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -103,7 +103,7 @@ export class Pairing extends DurableObject {
         this.pending.delete(id);
         reject(httpError(504, "The Kurviq tab did not answer in time (is it in the background on a phone, or busy?)"));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, ws });
+      this.pending.set(id, { resolve, reject, timer, tab: (ws.deserializeAttachment() as Attachment).tab });
       sendMessage(ws, { type: "command", id, command });
     });
   }
@@ -249,7 +249,7 @@ export class Pairing extends DurableObject {
     } else if (message.type === "result") {
       const entry = this.pending.get(String(message.id));
       // only the tab the command went to may answer it
-      if (!entry || entry.ws !== ws) {
+      if (!entry || entry.tab !== (ws.deserializeAttachment() as Attachment).tab) {
         return;
       }
       this.pending.delete(String(message.id));

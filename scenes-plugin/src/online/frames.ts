@@ -32,7 +32,10 @@ const MAX_PENDING = 8;
 export const createReceiver = () => {
   const partial = new Map<string, { parts: string[]; count: number; at: number }>();
   return (raw: string): any | null => {
-    if (raw.length > PART_SIZE + 1024) {
+    // a part is a slice of JSON text packed into JSON again: escaping (\" \\
+    // \uXXXX) can make it several times its length, so the bound is generous;
+    // the part's own content is checked below
+    if (raw.length > PART_SIZE * 6 + 1024) {
       throw new Error("message too big");
     }
     const message = JSON.parse(raw);
@@ -49,7 +52,8 @@ export const createReceiver = () => {
       !Number.isInteger(i) ||
       i < 0 ||
       i >= total ||
-      typeof data !== "string"
+      typeof data !== "string" ||
+      data.length > PART_SIZE
     ) {
       throw new Error("malformed part");
     }

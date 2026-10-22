@@ -678,7 +678,13 @@ const openSocket = () => {
     if (message.data === "pong") {
       return;
     }
-    const event = receive(String(message.data));
+    let event;
+    try {
+      event = receive(String(message.data));
+    } catch (error) {
+      console.error("[kurviq] dropped a malformed message from the agent link", error);
+      return;
+    }
     if (!event) {
       return;
     }
