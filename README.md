@@ -74,6 +74,11 @@ install:
   **Make private** moves it back; what was public stays in the public
   repository's git history. Viewers can **Make a copy** (synced to their
   own repository when they're connected) or **▶ Present** it.
+- **Share a presentation:** **Copy presentation link** (Scenes sidebar) or
+  **Share** (Slides sidebar) gives `kurviq.com/@<owner>/<scene>?present`:
+  it opens presenting (`&slide=3` starts at slide 3; skipped slides are
+  left out). Browsers allow fullscreen only after a click, so it starts in
+  the window with a **⛶ Fullscreen** button (or F); → / click next, Esc ends.
 - **Kurviq's own decks:** <https://kurviq.com/features> shows everything
   Kurviq adds. Decks in `online/scenes/` (listed in
   `scenes-plugin/src/publicScene.tsx`) open at `kurviq.com/<name>` in the

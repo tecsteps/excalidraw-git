@@ -691,7 +691,32 @@ body.slides-presenting {
     padding: 0 1rem 1rem;
   }
 
-  // presenting: fullscreen, nothing but the slide
+  // presenting: nothing but the slide (and a few controls when the mouse moves)
+  &__controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: var(--border-radius-lg);
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    transition: opacity 0.2s;
+
+    .public-scene__count {
+      color: #fff;
+      min-width: 3.5rem;
+    }
+  }
+
+  &--presenting:hover &__controls,
+  &__controls:focus-within {
+    opacity: 1;
+  }
+
   &--presenting {
     background: #000;
 

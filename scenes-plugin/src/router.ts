@@ -23,8 +23,19 @@ const sharedFromPath = (): { owner: string; name: string } | null => {
   }
 };
 
-/** a shared scene of the space this tab shows is just one of its scenes */
-const isOwnSpace = (owner: string) => connection.getState().repo?.owner.toLowerCase() === owner.toLowerCase();
+/** a presentation link: ?present (and &slide=3) */
+const presentFromSearch = () => {
+  const params = new URLSearchParams(window.location.search);
+  const slide = Number(params.get("slide"));
+  return { present: params.has("present"), ...(slide >= 1 ? { slide } : {}) };
+};
+
+/**
+ * A shared scene of the space this tab shows is just one of its scenes,
+ * unless the link is a presentation link: that one is presented for everyone.
+ */
+const isOwnSpace = (owner: string) =>
+  !presentFromSearch().present && connection.getState().repo?.owner.toLowerCase() === owner.toLowerCase();
 
 const sceneFromPath = (): string | null => {
   const shared = sharedFromPath();
@@ -117,9 +128,9 @@ export const connectRouter = async () => {
   const target = sceneFromPath();
   const shared = sharedFromPath();
   if (shared && !isOwnSpace(shared.owner)) {
-    publicScene.show(shared.name, shared.owner); // right away, the editor loads underneath
+    publicScene.show(shared.name, shared.owner, presentFromSearch()); // right away, the editor loads underneath
   } else if (isPublicScene(target)) {
-    publicScene.show(target);
+    publicScene.show(target, undefined, presentFromSearch());
   }
 
   await scenesController.ready;
@@ -130,8 +141,17 @@ export const connectRouter = async () => {
   }
   syncUrl("replace");
 
-  // viewer closed: the URL goes back to the current scene
-  publicScene.subscribe(() => syncUrl("replace"));
+  // viewer closed: the URL goes back to the current scene (without the viewer's ?present / ?slide)
+  publicScene.subscribe(() => {
+    if (!publicScene.shown()) {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("present");
+      params.delete("slide");
+      const query = params.toString();
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    }
+    syncUrl("replace");
+  });
 
   let lastCurrent = scenesController.getState().current;
   scenesController.subscribe(() => {
@@ -146,12 +166,12 @@ export const connectRouter = async () => {
   window.addEventListener("popstate", () => {
     const shared = sharedFromPath();
     if (shared && !isOwnSpace(shared.owner)) {
-      publicScene.show(shared.name, shared.owner);
+      publicScene.show(shared.name, shared.owner, presentFromSearch());
       return;
     }
     const name = sceneFromPath();
     if (isPublicScene(name)) {
-      publicScene.show(name);
+      publicScene.show(name, undefined, presentFromSearch());
       return;
     }
     if (publicScene.shown()) {

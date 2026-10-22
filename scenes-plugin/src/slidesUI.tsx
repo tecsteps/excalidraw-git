@@ -8,6 +8,8 @@ import clsx from "clsx";
 import { scenesController } from "./controller";
 import { deck } from "./deck";
 import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
+import { IS_ONLINE } from "./api";
+import { PresentationLink } from "./online/ui";
 import { presenter } from "./present";
 import { slideSorter } from "./slideSorter";
 import {
@@ -518,6 +520,7 @@ export const SlidesSidebar = () => {
           >
             ▶ Present
           </button>
+          {IS_ONLINE && <PresentationLink />}
           <button
             type="button"
             className="slides-btn"

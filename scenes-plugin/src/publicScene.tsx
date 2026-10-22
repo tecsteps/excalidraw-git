@@ -27,8 +27,11 @@ export const isPublicScene = (name: string | null): name is string => !!name && 
 // open / close (the router follows: URL /<name> while open)
 // -----------------------------------------------------------------------------
 
-/** a bundled scene (name), or someone's shared one */
-export type Shown = { name: string; owner?: string };
+/**
+ * A bundled scene (name), or someone's shared one. present / slide: a
+ * presentation link (?present&slide=3) starts presenting at that slide.
+ */
+export type Shown = { name: string; owner?: string; present?: boolean; slide?: number };
 
 let shown: Shown | null = null;
 const listeners = new Set<() => void>();
@@ -41,7 +44,8 @@ const setShown = (next: Shown | null) => {
 let openInSpace: ((owner: string, name: string) => void) | null = null;
 
 export const publicScene = {
-  show: (name: string, owner?: string) => setShown({ name, owner }),
+  show: (name: string, owner?: string, start: { present?: boolean; slide?: number } = {}) =>
+    setShown({ name, owner, ...start }),
   close: () => setShown(null),
   shown: () => shown,
   setSpaceOpener: (open: (owner: string, name: string) => void) => {
@@ -101,16 +105,17 @@ type Deck = {
 /** a drawing without slides is shown as one picture of everything */
 const WHOLE = "\u0000whole";
 
-const Viewer = ({ name, owner }: Shown) => {
+const Viewer = ({ name, owner, present: startPresenting, slide: startSlide }: Shown) => {
   const bundled = !owner;
   const title = bundled ? PUBLIC_SCENES[name].title : name;
   const [deck, setDeck] = useState<Deck | null>(null);
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(Math.max(0, (startSlide ?? 1) - 1));
   const [copying, setCopying] = useState(false);
-  /** fullscreen, slides only */
-  const [presenting, setPresenting] = useState(false);
+  /** slides only (in the window, or fullscreen) */
+  const [presenting, setPresenting] = useState(!!startPresenting);
+  const [fullscreen, setFullscreen] = useState(false);
   const stage = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const pictures = useRef(new Map<number, HTMLCanvasElement>());
@@ -123,7 +128,8 @@ const Viewer = ({ name, owner }: Shown) => {
       .then(({ json, public: isPublic, canEdit }) => {
         const data = JSON.parse(json);
         const elements = restoreElements(data.elements, null).filter((el) => !el.isDeleted);
-        const slides = getSlides(elements);
+        // backup slides ("skip when presenting") stay out of a shared deck
+        const slides = getSlides(elements).filter((frame: any) => !frame.customData?.slides?.skip);
         setDeck({
           json,
           elements,
@@ -172,7 +178,9 @@ const Viewer = ({ name, owner }: Shown) => {
   // leaving fullscreen (Esc) ends presenting
   useEffect(() => {
     const onChange = () => {
-      if (!document.fullscreenElement) {
+      const on = !!document.fullscreenElement;
+      setFullscreen(on);
+      if (!on) {
         setPresenting(false);
         root.current?.focus();
       }
@@ -181,11 +189,29 @@ const Viewer = ({ name, owner }: Shown) => {
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
+  /** fullscreen needs a click or key press: a presentation link starts in the window */
+  const enterFullscreen = () => root.current?.requestFullscreen?.().catch(() => {});
+
   const present = () => {
     setPresenting(true);
-    root.current?.requestFullscreen?.().catch(() => {});
+    enterFullscreen();
     root.current?.focus();
   };
+
+  const stopPresenting = () => {
+    setPresenting(false);
+    document.fullscreenElement && document.exitFullscreen().catch(() => {});
+    root.current?.focus();
+  };
+
+  // the URL says where the deck is (a reload or a copied link starts there)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    index ? params.set("slide", String(index + 1)) : params.delete("slide");
+    presenting ? params.set("present", "") : params.delete("present");
+    const query = params.toString().replace(/present=(&|$)/, "present$1");
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, [index, presenting]);
 
   const count = deck?.slides.length ?? 0;
   const go = (to: number) => setIndex(Math.max(0, Math.min(count - 1, to)));
@@ -195,14 +221,16 @@ const Viewer = ({ name, owner }: Shown) => {
     event.stopPropagation();
     if (event.key === "Escape") {
       if (presenting) {
-        setPresenting(false);
-        document.fullscreenElement && document.exitFullscreen().catch(() => {});
+        stopPresenting();
       } else {
         publicScene.close();
       }
     } else if ((event.key === "p" || event.key === "F5") && !presenting && deck) {
       event.preventDefault();
       present();
+    } else if (event.key === "f" && presenting) {
+      event.preventDefault();
+      fullscreen ? document.exitFullscreen().catch(() => {}) : enterFullscreen();
     } else if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(event.key)) {
       event.preventDefault();
       go(index + 1);
@@ -274,6 +302,19 @@ const Viewer = ({ name, owner }: Shown) => {
             <strong>{name}</strong> by @{owner} doesn't exist, or it is private.
           </p>
           <SignInOrAsk owner={owner!} />
+        </div>
+      )}
+      {presenting && (
+        <div className="public-scene__controls">
+          <span className="public-scene__count">{count ? `${index + 1} / ${count}` : "…"}</span>
+          {!fullscreen && (
+            <button type="button" className="slides-btn" onClick={enterFullscreen} title="Fullscreen (F)">
+              ⛶ Fullscreen
+            </button>
+          )}
+          <button type="button" className="slides-btn" onClick={stopPresenting} title="End the presentation (Esc)">
+            ✕
+          </button>
         </div>
       )}
       {!missing && (

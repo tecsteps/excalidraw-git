@@ -31,6 +31,7 @@ import type { RepoChoice, Space } from "./github";
 
 import lilitaLatin from "@excalidraw/excalidraw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2";
 
+import { deck } from "../deck";
 import { publicScene } from "../publicScene";
 import { openPublicScene } from "../router";
 
@@ -501,34 +502,70 @@ const SpaceSwitcher = () => {
   );
 };
 
-/** in the current scene's actions: share link, public / private */
+/** kurviq.com/@owner/scene (?present: starts presenting) */
+const shareLink = (owner: string, name: string, { present = false } = {}) =>
+  `${window.location.origin}/@${encodeURIComponent(owner)}/${encodeURIComponent(name)}${present ? "?present" : ""}`;
+
+/** a link button that copies and says so */
+const CopyLink = ({ link, label, title, className = "scenes-link" }: { link: string; label: string; title: string; className?: string }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={className}
+      title={`${link} — ${title}`}
+      onClick={() =>
+        navigator.clipboard.writeText(link).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        })
+      }
+    >
+      {copied ? "Copied ✓" : label}
+    </button>
+  );
+};
+
+const whoCanView = (item: SceneListItem, repo: RepoChoice) =>
+  item.public ? "anyone can view it" : `viewable by everyone who can read ${repo.owner}/${repo.name} on GitHub`;
+
+/** in the Slides sidebar: a link that opens the deck presenting */
+export const PresentationLink = () => {
+  const { repo } = useConnection();
+  const { current, list } = useSyncExternalStore(scenesController.subscribe, scenesController.getState);
+  const { slides } = useSyncExternalStore(deck.subscribe, deck.getState);
+  const item = list.find((entry) => entry.name === current);
+  if (!repo || !item || item.name === null || item.localOnly || !item.onGitHub || !slides.length) {
+    return null;
+  }
+  return (
+    <CopyLink
+      className="slides-btn"
+      link={shareLink(repo.owner, item.name, { present: true })}
+      label="Share"
+      title={`opens presenting; ${whoCanView(item, repo)}`}
+    />
+  );
+};
+
+/** in the current scene's actions: share links, public / private */
 export const SceneSharing = ({ item, disabled }: { item: SceneListItem; disabled?: boolean }) => {
   const { repo } = useConnection();
-  const [copied, setCopied] = useState(false);
+  const { slides } = useSyncExternalStore(deck.subscribe, deck.getState);
   if (!repo || item.name === null || item.localOnly) {
     return null;
   }
   const name = item.name;
-  const link = `${window.location.origin}/@${encodeURIComponent(repo.owner)}/${encodeURIComponent(name)}`;
   return (
     <>
-      <button
-        type="button"
-        className="scenes-link"
-        title={
-          item.public
-            ? `${link} — anyone can view it`
-            : `${link} — viewable by everyone who can read ${repo.owner}/${repo.name} on GitHub`
-        }
-        onClick={() =>
-          navigator.clipboard.writeText(link).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          })
-        }
-      >
-        {copied ? "Copied ✓" : "Copy link"}
-      </button>
+      <CopyLink link={shareLink(repo.owner, name)} label="Copy link" title={whoCanView(item, repo)} />
+      {slides.length > 0 && (
+        <CopyLink
+          link={shareLink(repo.owner, name, { present: true })}
+          label="Copy presentation link"
+          title={`opens presenting; ${whoCanView(item, repo)}`}
+        />
+      )}
       {!repo.readOnly && (
         <button
           type="button"
