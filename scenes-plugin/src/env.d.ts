@@ -7,3 +7,8 @@ interface ImportMetaEnv {
   /** "local" (scenes server on this machine) or "online" (Kurviq, GitHub API in the browser) */
   VITE_APP_SCENES_TARGET: string;
 }
+
+declare module "*.woff2" {
+  const url: string;
+  export default url;
+}

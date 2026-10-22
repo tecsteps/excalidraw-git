@@ -5,6 +5,8 @@
 //   /mcp/<key>       remote MCP for agents (scenes-mcp/tools.mjs), answered
 //                    through the pairing's open Kurviq tab
 //   /llms.txt        how agents use Kurviq
+//   /api/public/…    public scenes, cached (./shared.ts)
+//   /@owner/scene    a shared scene: the app, titled for link previews (./shared.ts)
 //   everything else  the app (static assets, built by `npm run build:online`)
 
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -14,6 +16,7 @@ import { createScenesMcp } from "../../scenes-mcp/tools.mjs";
 
 import llmsTxt from "../llms.txt";
 import { handleAuth } from "./auth";
+import { handlePublicApi, handleSharedPage } from "./shared";
 import { kurviqSkill } from "./skill";
 
 import type { AuthEnv } from "./auth";
@@ -83,7 +86,7 @@ const handleMcp = async (request: Request, env: Env, key: string) => {
 };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (env.CANONICAL_HOST && url.hostname !== env.CANONICAL_HOST && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
       url.hostname = env.CANONICAL_HOST;
@@ -128,6 +131,10 @@ export default {
       });
     }
 
-    return env.ASSETS.fetch(request);
+    const publicApi = handlePublicApi(request, ctx);
+    if (publicApi) {
+      return publicApi;
+    }
+    return (await handleSharedPage(request, env.ASSETS, ctx)) ?? env.ASSETS.fetch(request);
   },
 };

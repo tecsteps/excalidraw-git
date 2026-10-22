@@ -53,11 +53,31 @@ install:
   works. Treat the link like a password; **Make a new link** replaces it.
   Agents find everything they need at <https://kurviq.com/llms.txt>.
 
-- **Public scenes:** <https://kurviq.com/features> shows everything Kurviq
-  adds, as a deck. Decks in `online/scenes/` (listed in
-  `scenes-plugin/src/publicScene.tsx`) open at `kurviq.com/<name>` in a
-  read-only viewer above the editor; they are not added to the visitor's
-  scenes unless they click **Make a copy**.
+- **Teams (spaces):** install the Kurviq app on a GitHub organization and
+  its members share `<org>/kurviq-scenes`. Switch spaces in the Scenes
+  sidebar (each space keeps its own scenes in the browser). GitHub is the
+  only source of who may do what: write access edits, read access views
+  (read-only mode, nothing is pushed, agents can't edit either), and when
+  access ends on GitHub (removed, repository archived, deleted or
+  renamed, protected branch) Kurviq stops syncing and says why; the
+  scenes stay in the browser.
+- **Share a link:** **Copy link** (Scenes sidebar, current scene) gives
+  `kurviq.com/@<owner>/<scene>`, unique because GitHub account names are.
+  A teammate opens it, signs in with GitHub and sees the scene if GitHub
+  lets them read the repository; with write access, **Edit in <owner>'s
+  space** opens it there.
+- **Public scenes:** **Make public** moves a scene to the public
+  repository `<owner>/kurviq-public` (created when needed); its link then
+  works for everyone, without sign-in, read through a stateless Worker
+  route with a one-minute edge cache (`/api/public/<owner>/<scene>`; the
+  page preloads it and is titled after the scene for link previews).
+  **Make private** moves it back; what was public stays in the public
+  repository's git history. Viewers can **Make a copy** (synced to their
+  own repository when they're connected) or **▶ Present** it.
+- **Kurviq's own decks:** <https://kurviq.com/features> shows everything
+  Kurviq adds. Decks in `online/scenes/` (listed in
+  `scenes-plugin/src/publicScene.tsx`) open at `kurviq.com/<name>` in the
+  same viewer.
 
 Differences to the local install: Excalidraw's live collaboration and
 shareable links (excalidraw.com servers) are switched off, agents need your

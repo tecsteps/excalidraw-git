@@ -445,6 +445,8 @@ const status = () => {
     autoSync,
     github: sync.notConnected
       ? "not connected (all scenes stay in the user's browser, local-only)"
+      : sync.readOnly
+      ? `read only: ${sync.readOnly} (scenes can be read, not changed)`
       : sync.githubOnline === false
       ? "offline"
       : sync.githubOnline
@@ -474,6 +476,14 @@ const exclusive = <T,>(task: () => Promise<T>) => {
   return run;
 };
 
+/** online: GitHub lets the user read this space, not change it — agents can't either */
+const refuseIfReadOnly = (name: string | null | undefined) => {
+  const { readOnly } = scenesController.getState().sync;
+  if (readOnly && !(name && scenesController.isLocalOnly(name))) {
+    throw new Error(`Read only: ${readOnly}. The user can view these scenes but not change them.`);
+  }
+};
+
 /** the agent's edits of one scene must not overtake each other */
 let agentEdits: Promise<unknown> = Promise.resolve();
 
@@ -482,6 +492,7 @@ const runCommand = async (command: Command) => {
     case "flush":
       return scenesController.flush(command.name);
     case "scene-edit": {
+      refuseIfReadOnly(command.name);
       const run = agentEdits.then(() => editSceneOnGitHub(command, convertMcpElements));
       agentEdits = run.catch(() => {});
       if (IS_ONLINE) {
@@ -532,6 +543,7 @@ const runCommand = async (command: Command) => {
     case "read":
       return readOpenScene(command);
     case "edit":
+      refuseIfReadOnly(scenesController.getState().current);
       return editOpenScene(command, convertMcpElements);
     case "checkpoint-save":
       await setCheckpoint(command.id, command.data);

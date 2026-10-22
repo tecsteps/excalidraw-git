@@ -9,8 +9,22 @@
 
 import { createStore, del, delMany, entries, get, set } from "idb-keyval";
 
-export const META_KEY = "excalidraw-scenes";
-const snapshotStore = createStore("excalidraw-scenes-db", "snapshots");
+// Kurviq: each space (a GitHub account or organization with its scenes
+// repository) keeps its own scenes in the browser. "" is the personal space,
+// which uses the keys from before spaces existed.
+export const SPACE_KEY = "kurviq-space";
+export const currentSpace = (() => {
+  try {
+    return localStorage.getItem(SPACE_KEY) || "";
+  } catch {
+    return "";
+  }
+})();
+/** suffix of this space's storage keys */
+export const spaceSuffix = (space: string) => (space ? `@${space}` : "");
+
+export const META_KEY = `excalidraw-scenes${spaceSuffix(currentSpace)}`;
+const snapshotStore = createStore(`excalidraw-scenes-db${spaceSuffix(currentSpace)}`, "snapshots");
 
 /** key used for the scene that has not been named / saved yet */
 export const UNTITLED = "\u0000untitled";
@@ -121,7 +135,7 @@ export const deleteSnapshot = (name: string | null) =>
 // stateless
 // -----------------------------------------------------------------------------
 
-const agentStore = createStore("excalidraw-scenes-agent", "data");
+const agentStore = createStore(`excalidraw-scenes-agent${spaceSuffix(currentSpace)}`, "data");
 
 /** what the canvas looked like when an agent last read / edited it */
 export type AgentBaseline = { at: string; action: string; elements: unknown[] };

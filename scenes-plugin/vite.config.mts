@@ -5,7 +5,7 @@
 // its env dir relative to cwd), e.g.:
 //   cd excalidraw/excalidraw-app && npx vite --config ../../scenes-plugin/vite.config.mts
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -598,6 +598,14 @@ const kurviqOnline = () => ({
     }
     for (const file of UPSTREAM_ONLY) {
       rmSync(path.join(out, file), { recursive: true, force: true });
+    }
+    // the UI font: upstream loads it from its CDN; the page preloads it from
+    // /fonts/Assistant/ and fonts.css asks for it next to itself in /assets/
+    const assistant = path.join(HERE, "../excalidraw/packages/excalidraw/fonts/Assistant");
+    mkdirSync(path.join(out, "fonts/Assistant"), { recursive: true });
+    for (const file of readdirSync(assistant).filter((name) => name.endsWith(".woff2"))) {
+      copyFileSync(path.join(assistant, file), path.join(out, "fonts/Assistant", file));
+      copyFileSync(path.join(assistant, file), path.join(out, "assets", file));
     }
     // stylesheets (hashed file names, so the service worker's cache stays valid)
     for (const file of readdirSync(path.join(out, "assets"))) {

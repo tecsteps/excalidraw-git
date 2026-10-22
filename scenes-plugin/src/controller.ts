@@ -75,6 +75,8 @@ export type SceneListItem = {
   updatedAt?: string | null;
   /** renamed here, not yet on GitHub: the name it still has there */
   pendingRename?: string;
+  /** online: in the space's public repository (everyone can read it) */
+  public?: boolean;
 };
 
 export type Activity = {
@@ -93,6 +95,8 @@ export type SyncInfo = {
   running: boolean;
   /** online (Kurviq): GitHub not connected or no repo chosen — everything stays in this browser */
   notConnected: boolean;
+  /** online: GitHub lets this user read the space, not change it (why) — nothing is pushed */
+  readOnly: string | null;
 };
 
 export type ScenesState = {
@@ -186,6 +190,7 @@ class ScenesController {
       lastError: null,
       running: false,
       notConnected: false,
+      readOnly: null,
     },
     activity: [],
     conflict: null,
@@ -528,6 +533,7 @@ class ScenesController {
           localOnly: !!meta?.localOnly,
           updatedAt: remote?.updatedAt,
           ...(meta?.renamedFrom ? { pendingRename: meta.renamedFrom } : {}),
+          ...(remote?.public ? { public: true } : {}),
         };
       });
     if (this.state.current === null || this.meta.scenes[UNTITLED]) {
@@ -963,6 +969,41 @@ class ScenesController {
       }
   }
 
+  /**
+   * Online: make a scene public (it moves to the space's public repository)
+   * or private again. Unpushed changes go to GitHub first.
+   */
+  setPublic = (name: string, on: boolean) =>
+    this.withBusy("saving", async () => {
+      if (!scenesApi.setPublic) {
+        throw new Error("Public scenes need Kurviq online");
+      }
+      if (this.isLocalOnly(name)) {
+        throw new Error(`"${name}" is kept in this browser only: sync it with GitHub first`);
+      }
+      if (this.isDirty(name) || this.statusOf(name) !== "synced") {
+        await this.pushScene(name, { manual: true });
+      }
+      await scenesApi.setPublic(name, on);
+      await this.refreshListing();
+      this.log("push", on ? `"${name}" is public now` : `"${name}" is private again`);
+    });
+
+  /**
+   * Online: this tab switches to another space (the page reloads into its
+   * own storage). The open scene is kept, and the canvas is marked so the
+   * other space doesn't take it for one of its scenes.
+   */
+  leaveForReload = () =>
+    this.exclusive(async () => {
+      await this.ready;
+      await this.stashCurrent();
+      this.persistMeta();
+      const api = this.api;
+      this.detach();
+      api?.updateScene({ elements: [], appState: { name: "" }, captureUpdate: CaptureUpdateAction.NEVER });
+    });
+
   /** create a new, empty named scene and switch to it */
   create = (name: string, { localOnly = this.newScenesLocalOnly() }: { localOnly?: boolean } = {}) =>
     this.withBusy("loading", async () => {
@@ -1122,6 +1163,7 @@ class ScenesController {
           ...this.state.sync,
           serverReachable: true,
           notConnected: false,
+          readOnly: listing.remote.readOnly ?? null,
           githubOnline: listing.remote.online,
           lastCheckedAt: listing.remote.lastFetchAt,
           lastError: listing.remote.lastError,
@@ -1135,6 +1177,16 @@ class ScenesController {
       }
       if (wasOnline === false) {
         this.log("info", "GitHub reachable again");
+      }
+
+      if (this.state.sync.readOnly) {
+        // GitHub lets this user read the space, not change it: only pull
+        for (const item of this.state.list) {
+          if (item.name !== null && this.statusOf(item.name) === "behind" && !this.isDirty(item.name)) {
+            await this.exclusive(() => this.pullScene(item.name!));
+          }
+        }
+        return;
       }
 
       // renames / deletions made here (e.g. while offline) go first — they
@@ -1245,6 +1297,12 @@ class ScenesController {
     if (this.isLocalOnly(name)) {
       return null; // never leaves this browser
     }
+    if (this.state.sync.readOnly) {
+      if (manual) {
+        throw new Error(`Saved in this browser only. Read only: ${this.state.sync.readOnly}`);
+      }
+      return null;
+    }
     if (this.meta.scenes[name]?.renamedFrom) {
       // the rename has to reach GitHub before the content can
       await this.pushPendingRename(name);
@@ -1292,6 +1350,15 @@ class ScenesController {
         this.setState({ sync: { ...this.state.sync, githubOnline: false, notConnected: true } });
         if (manual) {
           throw new Error("Saved in this browser — connect GitHub to sync it");
+        }
+        return null;
+      }
+      if (apiError.readOnly) {
+        // GitHub refused for good (permissions, archived, protected branch): stop pushing
+        this.setState({ sync: { ...this.state.sync, readOnly: apiError.message.replace(/^Read only: /, "") } });
+        this.log("error", apiError.message);
+        if (manual) {
+          throw new Error(`Saved in this browser only. ${apiError.message}`);
         }
         return null;
       }
@@ -1585,7 +1652,7 @@ class ScenesController {
     const existing = this.state.remote.find((scene) => scene.name === name);
     this.setState({
       remote: sha
-        ? [...others, { name, sha, updatedAt: existing?.updatedAt ?? new Date().toISOString() }].sort((a, b) =>
+        ? [...others, { ...existing, name, sha, updatedAt: existing?.updatedAt ?? new Date().toISOString() }].sort((a, b) =>
             a.name.localeCompare(b.name),
           )
         : others,

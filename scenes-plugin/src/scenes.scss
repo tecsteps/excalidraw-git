@@ -521,7 +521,8 @@
 
   .scenes-current__manage {
     display: flex;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
   }
 
   .scenes-link--danger {

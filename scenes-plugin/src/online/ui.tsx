@@ -8,6 +8,8 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { scenesController } from "../controller";
 
+import { SPACE_KEY, currentSpace, spaceSuffix } from "../storage";
+
 import {
   SCENES_REPO,
   checkConnection,
@@ -18,13 +20,18 @@ import {
   disconnectGitHub,
   findScenesRepo,
   isInstalledFor,
+  listSpaces,
+  newRepoUrl,
+  storeRepoForSpace,
 } from "./github";
 import { pairing } from "./pairing";
 
-import type { RepoChoice } from "./github";
+import type { SceneListItem } from "../controller";
+import type { RepoChoice, Space } from "./github";
 
 import lilitaLatin from "@excalidraw/excalidraw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2";
 
+import { publicScene } from "../publicScene";
 import { openPublicScene } from "../router";
 
 import "./online.scss";
@@ -41,16 +48,17 @@ let started = false;
 /** the answer of a GitHub redirect, read before anything can rewrite the URL */
 const githubAnswer = new URLSearchParams(window.location.search).get("github");
 
-// setting up sync, as a dialog: Kurviq uses <account>/kurviq-scenes, or
-// creates it; where it can't, the dialog says what to do on GitHub
+// setting up sync, as a dialog: a space is a GitHub account or organization
+// with its <owner>/kurviq-scenes; Kurviq uses it, or creates it, and where it
+// can't, the dialog says what to do on GitHub. GitHub decides who may do what.
 type Setup =
   | null
-  | { step: "working" }
-  | { step: "install" }
-  | { step: "access" }
-  | { step: "create" }
-  | { step: "error"; message: string }
-  | { step: "done"; repo: RepoChoice; published: number };
+  | { step: "working"; owner: string }
+  | { step: "install"; owner: string }
+  | { step: "access"; owner: string }
+  | { step: "create"; owner: string }
+  | { step: "error"; owner: string; message: string }
+  | { step: "done"; owner: string; repo: RepoChoice; published: number };
 let setup: Setup = null;
 const setupListeners = new Set<() => void>();
 const setSetup = (next: Setup) => {
@@ -74,7 +82,7 @@ const localOnlyScenes = () =>
     .list.filter((item) => item.name !== null && item.localOnly)
     .map((item) => item.name!);
 
-/** sync with this repository from now on; returns how many local-only scenes went along */
+/** sync this space with its repository from now on; returns how many local-only scenes went along */
 const activateRepo = async (repo: RepoChoice) => {
   const current = connection.getState().repo;
   const switching = !!current && (current.owner !== repo.owner || current.name !== repo.name);
@@ -85,11 +93,13 @@ const activateRepo = async (repo: RepoChoice) => {
     await scenesController.resetGitHubState();
   }
   let published = 0;
-  for (const name of localOnlyScenes()) {
-    await scenesController.setLocalOnly(name, false).then(
-      () => published++,
-      () => {},
-    );
+  if (!repo.readOnly) {
+    for (const name of localOnlyScenes()) {
+      await scenesController.setLocalOnly(name, false).then(
+        () => published++,
+        () => {},
+      );
+    }
   }
   scenesController.syncNow({ refresh: true });
   return published;
@@ -97,38 +107,73 @@ const activateRepo = async (repo: RepoChoice) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** use (or create) <account>/kurviq-scenes and sync with it */
-const setUpSync = async () => {
+/** the browser-storage id of a space: "" = the personal one */
+const spaceIdOf = (owner: string) =>
+  owner.toLowerCase() === connection.getState().user?.login.toLowerCase() ? "" : owner.toLowerCase();
+
+/** the space whose scenes this tab shows (its owner), if sync is set up */
+export const spaceOwner = () => connection.getState().repo?.owner ?? null;
+
+/**
+ * Switch this tab to another space: its scenes live in their own browser
+ * storage, so the page reloads into it (the open scene is kept first).
+ */
+const enterSpace = async (owner: string, repo: RepoChoice, path = "/") => {
+  const space = spaceIdOf(owner);
+  storeRepoForSpace(space, repo);
+  try {
+    const metaKey = `excalidraw-scenes${spaceSuffix(space)}`;
+    if (!localStorage.getItem(metaKey)) {
+      // a space new to this browser: its new scenes sync (like after setting up sync)
+      localStorage.setItem(metaKey, JSON.stringify({ newLocalOnly: false }));
+    }
+    localStorage.setItem(SPACE_KEY, space);
+  } catch {}
+  await scenesController.leaveForReload();
+  window.location.href = path;
+};
+
+/**
+ * Sync with <owner>/kurviq-scenes (default: the space of this tab, or the
+ * personal one). Another space than this tab's: the tab switches into it,
+ * and opens `path` there.
+ */
+export const setUpSync = async (owner?: string, path?: string) => {
   const login = connection.getState().user?.login;
   if (!login) {
     return;
   }
-  setSetup({ step: "working" });
+  owner ??= currentSpace ? spaceOwner() ?? currentSpace : login;
+  setSetup({ step: "working", owner });
   try {
-    let repo = await findScenesRepo(login);
+    let repo = await findScenesRepo(owner);
     if (!repo) {
-      if (!(await isInstalledFor(login))) {
-        setSetup({ step: "install" });
+      if (!(await isInstalledFor(owner))) {
+        setSetup({ step: "install", owner });
         return;
       }
-      const created = await createScenesRepo();
+      const created = await createScenesRepo(owner);
       if (created !== "created") {
-        setSetup({ step: created === "exists" ? "access" : "create" });
+        setSetup({ step: created === "exists" ? "access" : "create", owner });
         return;
       }
       // a new repository takes a moment to show up
       for (let attempt = 0; attempt < 10 && !repo; attempt++) {
         await sleep(1000);
-        repo = await findScenesRepo(login);
+        repo = await findScenesRepo(owner);
       }
       if (!repo) {
-        setSetup({ step: "access" });
+        setSetup({ step: "access", owner });
         return;
       }
     }
-    setSetup({ step: "done", repo, published: await activateRepo(repo) });
+    if (spaceIdOf(owner) !== currentSpace) {
+      await enterSpace(owner, repo, path);
+      return;
+    }
+    setSetup({ step: "done", owner, repo, published: await activateRepo(repo) });
   } catch (error: any) {
-    setSetup({ step: "error", message: error.message });
+    setSetup({ step: "error", owner, message: error.message });
   }
 };
 
@@ -137,6 +182,11 @@ export const startOnline = () => {
     return;
   }
   started = true;
+  // someone's shared scene: members of that space edit it there
+  publicScene.setSpaceOpener((owner, name) => {
+    publicScene.close();
+    setUpSync(owner, `/${encodeURIComponent(name)}`);
+  });
   // keep the scenes even under storage pressure (Safari, full disks)
   navigator.storage?.persist?.().catch(() => {});
 
@@ -161,7 +211,8 @@ export const startOnline = () => {
     const { user, repo } = connection.getState();
     if (showSetup && user !== undefined) {
       showSetup = false;
-      if (user && !repo) {
+      // (signed in to see someone's shared scene: no setup of one's own then)
+      if (user && !repo && !/^\/(@|%40)/i.test(window.location.pathname)) {
         setUpSync();
       }
     }
@@ -179,9 +230,6 @@ export const startOnline = () => {
 // -----------------------------------------------------------------------------
 
 const repoUrl = (repo: RepoChoice) => `https://github.com/${repo.owner}/${repo.name}`;
-
-/** GitHub's "new repository" form, filled in (opens in a new tab) */
-const NEW_REPO_URL = `https://github.com/new?name=${SCENES_REPO}&visibility=private&description=Drawings+from+Kurviq`;
 
 /** in the scene dropdown: offer GitHub while it is not connected */
 export const ConnectGitHubOffer = () => {
@@ -290,7 +338,7 @@ export const WelcomeConnectGitHub = () => {
 
 /** top of the Scenes sidebar: the GitHub connection of this browser */
 export const GitHubPanel = () => {
-  const { user, repo, error } = useConnection();
+  const { user, repo, error, lost } = useConnection();
 
   if (user === undefined) {
     return <section className="kq-card kq-muted">Checking GitHub connection…</section>;
@@ -319,6 +367,23 @@ export const GitHubPanel = () => {
       </section>
     );
   }
+  if (lost && repo) {
+    return (
+      <section className="kq-card">
+        <div className="kq-card__title">Sync with {repo.owner}/{repo.name} stopped</div>
+        <div className="kq-muted">{lost}. Your scenes are safe in this browser.</div>
+        <div className="scenes-row">
+          <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => setUpSync(repo.owner)}>
+            Set up sync again
+          </button>
+        </div>
+        <SpaceSwitcher />
+        <button type="button" className="scenes-link kq-left" onClick={() => disconnectGitHub()}>
+          Disconnect GitHub
+        </button>
+      </section>
+    );
+  }
   if (!repo) {
     return (
       <section className="kq-card">
@@ -328,7 +393,7 @@ export const GitHubPanel = () => {
         <div className="kq-muted">
           Your scenes go to the private repository{" "}
           <code>
-            {user.login}/{SCENES_REPO}
+            {currentSpace || user.login}/{SCENES_REPO}
           </code>
           ; Kurviq creates it if it doesn't exist.
         </div>
@@ -337,6 +402,7 @@ export const GitHubPanel = () => {
             Set up sync
           </button>
         </div>
+        <SpaceSwitcher />
         <button type="button" className="scenes-link kq-left" onClick={() => disconnectGitHub()}>
           Disconnect GitHub
         </button>
@@ -349,7 +415,7 @@ export const GitHubPanel = () => {
         <span className="scenes-repo__logo">{GithubIcon}</span>
         <span className="scenes-repo__text">
           <span className="scenes-repo__caption">
-            Synced with GitHub
+            {repo.readOnly ? "Read only on GitHub" : "Synced with GitHub"}
             <span className="scenes-repo__branch">{repo.branch}</span>
           </span>
           <span className="scenes-repo__name">
@@ -360,6 +426,8 @@ export const GitHubPanel = () => {
         </span>
         <span className="scenes-repo__external">{ExternalLinkIcon}</span>
       </a>
+      {repo.readOnly && <div className="kq-muted">Read only: {repo.readOnly}.</div>}
+      <SpaceSwitcher />
       <div className="kq-repo-actions">
         <span className="kq-muted">as {user.login}</span>
         <button
@@ -382,6 +450,128 @@ export const GitHubPanel = () => {
   );
 };
 
+/**
+ * Spaces: your account and every organization where the Kurviq app is
+ * installed (as GitHub lists them). Switching reloads the tab into that
+ * space's scenes.
+ */
+const SpaceSwitcher = () => {
+  const { user, repo } = useConnection();
+  const [spaces, setSpaces] = useState<Space[] | null>(null);
+  useEffect(() => {
+    listSpaces()
+      .then(setSpaces)
+      .catch(() => setSpaces(null));
+  }, [user?.login]);
+  if (!user) {
+    return null;
+  }
+  const here = (repo?.owner ?? (currentSpace || user.login)).toLowerCase();
+  return (
+    <div className="kq-space">
+      <label className="kq-field">
+        <span>Space</span>
+        <select
+          value={here}
+          onChange={(event) => {
+            const owner = spaces?.find((space) => space.owner.toLowerCase() === event.target.value)?.owner;
+            if (owner) {
+              setUpSync(owner);
+            }
+          }}
+        >
+          {!spaces?.some((space) => space.owner.toLowerCase() === here) && <option value={here}>{repo?.owner ?? here}</option>}
+          {(spaces ?? []).map((space) => (
+            <option key={space.owner} value={space.owner.toLowerCase()}>
+              {space.owner}
+              {space.organization ? " (organization)" : " (personal)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className="scenes-link kq-left"
+        title="Install the Kurviq app on an organization on GitHub; its members then share that space"
+        onClick={() => connectGitHub("install")}
+      >
+        Add an organization…
+      </button>
+    </div>
+  );
+};
+
+/** in the current scene's actions: share link, public / private */
+export const SceneSharing = ({ item, disabled }: { item: SceneListItem; disabled?: boolean }) => {
+  const { repo } = useConnection();
+  const [copied, setCopied] = useState(false);
+  if (!repo || item.name === null || item.localOnly) {
+    return null;
+  }
+  const name = item.name;
+  const link = `${window.location.origin}/@${encodeURIComponent(repo.owner)}/${encodeURIComponent(name)}`;
+  return (
+    <>
+      <button
+        type="button"
+        className="scenes-link"
+        title={
+          item.public
+            ? `${link} — anyone can view it`
+            : `${link} — viewable by everyone who can read ${repo.owner}/${repo.name} on GitHub`
+        }
+        onClick={() =>
+          navigator.clipboard.writeText(link).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {copied ? "Copied ✓" : "Copy link"}
+      </button>
+      {!repo.readOnly && (
+        <button
+          type="button"
+          className="scenes-link"
+          disabled={disabled}
+          onClick={() => {
+            const ok = item.public
+              ? window.confirm(
+                  `Make "${name}" private again? It moves back to ${repo.owner}/${SCENES_REPO}. Note: what was public stays in the git history of ${repo.owner}/kurviq-public.`,
+                )
+              : window.confirm(
+                  `Make "${name}" public? It moves to the public repository ${repo.owner}/kurviq-public: anyone can view it, including images and text on it, and it stays in that repository's git history.`,
+                );
+            if (ok) {
+              scenesController.setPublic(name, !item.public).catch((error) => window.alert(error.message));
+            }
+          }}
+        >
+          {item.public ? "Make private" : "Make public"}
+        </button>
+      )}
+    </>
+  );
+};
+
+/** a read-only space: the editor shows the scenes, nothing can be changed */
+export const ReadOnlyGuard = () => {
+  const { sync, checking } = useSyncExternalStore(scenesController.subscribe, scenesController.getState);
+  const current = useSyncExternalStore(scenesController.subscribe, () => scenesController.getState().current);
+  const readOnly = sync.readOnly && !(current && scenesController.isLocalOnly(current)) ? sync.readOnly : null;
+  useEffect(() => {
+    const api = scenesController.getApi();
+    if (readOnly && api && !api.getAppState().viewModeEnabled) {
+      api.updateScene({ appState: { viewModeEnabled: true } });
+    }
+  }, [readOnly, checking, current]);
+  return readOnly ? (
+    <div className="kq-readonly" role="status">
+      Read only: {readOnly}
+    </div>
+  ) : null;
+};
+
 /** setting up sync (rendered next to the editor, see index.tsx) */
 export const RepoSetupDialog = () => {
   const current = useSetup();
@@ -394,7 +584,7 @@ export const RepoSetupDialog = () => {
     }
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && close();
     // back from GitHub's tab (repository created): try again
-    const onFocus = () => current.step === "create" && setUpSync();
+    const onFocus = () => current.step === "create" && setUpSync(current.owner);
     window.addEventListener("keydown", onKey);
     window.addEventListener("focus", onFocus);
     return () => {
@@ -406,7 +596,10 @@ export const RepoSetupDialog = () => {
   if (!current || !user) {
     return null;
   }
-  const target = `${user.login}/${SCENES_REPO}`;
+  const { owner } = current;
+  const personal = owner.toLowerCase() === user.login.toLowerCase();
+  const target = `${owner}/${SCENES_REPO}`;
+  const retry = () => setUpSync(owner);
   const later = (
     <button type="button" className="scenes-link kq-left" onClick={close}>
       Later (Scenes sidebar, top left)
@@ -419,28 +612,31 @@ export const RepoSetupDialog = () => {
           <>
             <h2 id="kq-setup-title">Setting up sync…</h2>
             <p className="kq-muted">
-              Connected as <strong>{user.login}</strong>. Preparing your repository <code>{target}</code>.
+              Connected as <strong>{user.login}</strong>. Preparing <code>{target}</code>.
             </p>
           </>
         );
       case "done":
         return (
           <>
-            <h2 id="kq-setup-title">Synced with GitHub ✓</h2>
+            <h2 id="kq-setup-title">{current.repo.readOnly ? "Connected, read only" : "Synced with GitHub ✓"}</h2>
             <p>
               Your scenes now sync with{" "}
-              <a href={`https://github.com/${current.repo.owner}/${current.repo.name}`} target="_blank" rel="noopener noreferrer">
+              <a href={repoUrl(current.repo)} target="_blank" rel="noopener noreferrer">
                 {current.repo.owner}/{current.repo.name}
               </a>
               .
             </p>
             <p className="kq-muted">
-              {current.published
-                ? `${current.published} scene${current.published === 1 ? "" : "s"} from this browser ${
-                    current.published === 1 ? "goes" : "go"
-                  } there now. `
-                : ""}
-              Every change is saved there a few seconds after you stop drawing.
+              {current.repo.readOnly
+                ? `Read only: ${current.repo.readOnly}. You can view its scenes and make copies of them.`
+                : `${
+                    current.published
+                      ? `${current.published} scene${current.published === 1 ? "" : "s"} from this browser ${
+                          current.published === 1 ? "goes" : "go"
+                        } there now. `
+                      : ""
+                  }Every change is saved there a few seconds after you stop drawing.`}
             </p>
             <div className="scenes-row">
               <button type="button" className="scenes-btn scenes-btn--primary" onClick={close}>
@@ -452,10 +648,11 @@ export const RepoSetupDialog = () => {
       case "install":
         return (
           <>
-            <h2 id="kq-setup-title">Allow Kurviq on your GitHub account</h2>
+            <h2 id="kq-setup-title">Allow Kurviq on {personal ? "your GitHub account" : owner}</h2>
             <p className="kq-muted">
-              Kurviq keeps your scenes in the private repository <code>{target}</code>. Allow the Kurviq app for your
-              account <strong>{user.login}</strong> on GitHub; you're back here right after.
+              Kurviq keeps the scenes in the private repository <code>{target}</code>. Allow the Kurviq app for{" "}
+              <strong>{owner}</strong> on GitHub; you're back here right after.
+              {personal ? "" : " In organizations, an owner may have to approve the app first."}
             </p>
             <div className="scenes-row">
               <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
@@ -471,13 +668,13 @@ export const RepoSetupDialog = () => {
             <h2 id="kq-setup-title">Give Kurviq access to {SCENES_REPO}</h2>
             <p className="kq-muted">
               <code>{target}</code> exists, but Kurviq can't use it yet. On GitHub, add it to the repositories of the
-              Kurviq app.
+              Kurviq app{personal ? "" : ` for ${owner} (an organization owner can do that)`}.
             </p>
             <div className="scenes-row">
               <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
                 Continue on GitHub
               </button>
-              <button type="button" className="scenes-btn" onClick={() => setUpSync()}>
+              <button type="button" className="scenes-btn" onClick={retry}>
                 Try again
               </button>
             </div>
@@ -487,16 +684,16 @@ export const RepoSetupDialog = () => {
       case "create":
         return (
           <>
-            <h2 id="kq-setup-title">Create {SCENES_REPO} on GitHub</h2>
+            <h2 id="kq-setup-title">Create {target} on GitHub</h2>
             <p className="kq-muted">
               GitHub opens with the repository filled in (private). Click "Create repository" there and come back: sync
-              starts by itself.
+              starts by itself.{personal ? "" : ` You need the right to create repositories in ${owner}.`}
             </p>
             <div className="scenes-row">
-              <a className="scenes-btn scenes-btn--primary" href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
+              <a className="scenes-btn scenes-btn--primary" href={newRepoUrl(owner)} target="_blank" rel="noopener noreferrer">
                 Create it on GitHub
               </a>
-              <button type="button" className="scenes-btn" onClick={() => setUpSync()}>
+              <button type="button" className="scenes-btn" onClick={retry}>
                 Try again
               </button>
             </div>
@@ -509,7 +706,7 @@ export const RepoSetupDialog = () => {
             <h2 id="kq-setup-title">Sync could not be set up</h2>
             <p className="scenes-error">{current.message}</p>
             <div className="scenes-row">
-              <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => setUpSync()}>
+              <button type="button" className="scenes-btn scenes-btn--primary" onClick={retry}>
                 Try again
               </button>
             </div>

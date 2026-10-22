@@ -1,12 +1,36 @@
 // Scene URLs: http://draw.test/<scene name> opens that scene (creating it
 // locally if it doesn't exist yet) and the URL follows the current scene.
-// Public scenes (kurviq.com/features) open in a viewer above the editor
-// instead; see publicScene.tsx.
+// Online, two more kinds open in a viewer above the editor instead (see
+// publicScene.tsx): Kurviq's own (kurviq.com/features) and shared ones,
+// kurviq.com/@<owner>/<scene> (the owner's space; the visitor's own space
+// opens as usual).
 
+import { IS_ONLINE } from "./api";
 import { scenesController } from "./controller";
+import { connection } from "./online/github";
 import { isPublicScene, publicScene } from "./publicScene";
 
+/** /@owner/scene: someone's shared scene */
+const sharedFromPath = (): { owner: string; name: string } | null => {
+  const match = IS_ONLINE && window.location.pathname.match(/^\/(?:@|%40)([A-Za-z0-9-]{1,39})\/(.+?)\/?$/i);
+  if (!match) {
+    return null;
+  }
+  try {
+    return { owner: match[1], name: decodeURIComponent(match[2]) };
+  } catch {
+    return null;
+  }
+};
+
+/** a shared scene of the space this tab shows is just one of its scenes */
+const isOwnSpace = (owner: string) => connection.getState().repo?.owner.toLowerCase() === owner.toLowerCase();
+
 const sceneFromPath = (): string | null => {
+  const shared = sharedFromPath();
+  if (shared) {
+    return isOwnSpace(shared.owner) ? shared.name : null;
+  }
   const raw = window.location.pathname.replace(/^\/+|\/+$/g, "");
   if (!raw) {
     return null;
@@ -91,8 +115,11 @@ export const connectRouter = async () => {
   };
 
   const target = sceneFromPath();
-  if (isPublicScene(target)) {
-    publicScene.show(target); // right away, the editor loads underneath
+  const shared = sharedFromPath();
+  if (shared && !isOwnSpace(shared.owner)) {
+    publicScene.show(shared.name, shared.owner); // right away, the editor loads underneath
+  } else if (isPublicScene(target)) {
+    publicScene.show(target);
   }
 
   await scenesController.ready;
@@ -117,6 +144,11 @@ export const connectRouter = async () => {
   });
 
   window.addEventListener("popstate", () => {
+    const shared = sharedFromPath();
+    if (shared && !isOwnSpace(shared.owner)) {
+      publicScene.show(shared.name, shared.owner);
+      return;
+    }
     const name = sceneFromPath();
     if (isPublicScene(name)) {
       publicScene.show(name);

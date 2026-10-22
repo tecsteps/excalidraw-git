@@ -23,7 +23,16 @@ import { PublicSceneOverlay } from "./publicScene";
 import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
 import { connection } from "./online/github";
-import { ConnectGitHubOffer, GitHubPanel, KurviqFooter, McpButton, RepoSetupDialog, startOnline } from "./online/ui";
+import {
+  ConnectGitHubOffer,
+  GitHubPanel,
+  KurviqFooter,
+  McpButton,
+  ReadOnlyGuard,
+  RepoSetupDialog,
+  SceneSharing,
+  startOnline,
+} from "./online/ui";
 
 import type { Activity, SceneListItem, ScenesState, SyncStatus } from "./controller";
 
@@ -397,6 +406,9 @@ const SyncBar = ({ state, now }: { state: ScenesState; now: number }) => {
   if (sync.serverReachable === false) {
     tone = "danger";
     text = IS_ONLINE ? "Kurviq server not reachable — working locally" : "Scenes server not running — working locally";
+  } else if (sync.readOnly) {
+    tone = "muted";
+    text = `Read only — ${sync.readOnly}`;
   } else if (sync.githubOnline === false) {
     tone = "danger";
     text = "GitHub not reachable — working locally";
@@ -764,6 +776,11 @@ const SceneRow = ({
         >
           <span className="scenes-item__name">{item.name ?? <em>{UNTITLED_LABEL}</em>}</span>
           {item.name !== null && !item.autoSync && !item.localOnly && <span className="scenes-item__manual">manual</span>}
+          {item.public && (
+            <span className="scenes-item__public" title="Public: anyone with the link can view it">
+              public
+            </span>
+          )}
           <StatusBadge status={item.status} compact={item.status === "synced"} />
         </button>
         {item.name !== null && (
@@ -960,6 +977,7 @@ export const ScenesSidebar = () => {
               >
                 Delete
               </button>
+              {IS_ONLINE && <SceneSharing item={currentItem} disabled={isBusy} />}
             </div>
           )}
 
@@ -1033,6 +1051,7 @@ export const ScenesSidebar = () => {
     <SlideSorterOverlay />
     <PublicSceneOverlay />
     {IS_ONLINE && <RepoSetupDialog />}
+    {IS_ONLINE && <ReadOnlyGuard />}
     </>
   );
 };

@@ -4,13 +4,21 @@
 
 import { githubScenes } from "./online/github";
 
-export type RemoteScene = { name: string; sha: string; updatedAt: string | null };
+export type RemoteScene = {
+  name: string;
+  sha: string;
+  updatedAt: string | null;
+  /** online: in the space's public repository (kurviq-public) */
+  public?: boolean;
+};
 
 export type RemoteInfo = {
   /** GitHub reachable at the last attempt (null = not tried yet) */
   online: boolean | null;
   lastFetchAt: string | null;
   lastError: string | null;
+  /** online: GitHub lets this user read the space's repository, not change it (why) */
+  readOnly?: string | null;
 };
 
 /** Kurviq: the online build (GitHub API in the browser, no scenes server) */
@@ -32,6 +40,8 @@ export type ApiError = Error & {
   exists?: boolean;
   /** online: GitHub is not connected (or no repo chosen) — work locally */
   notConnected?: boolean;
+  /** online: the space is read only on GitHub — nothing can be pushed */
+  readOnly?: boolean;
 };
 
 const request = async (path: string, init?: RequestInit) => {
@@ -62,6 +72,8 @@ const request = async (path: string, init?: RequestInit) => {
 const scenePath = (name: string) => `/api/scenes/${encodeURIComponent(name)}`;
 
 const localScenesApi = {
+  /** online only: move a scene to the space's public repository and back */
+  setPublic: undefined as undefined | ((name: string, on: boolean) => Promise<unknown>),
   list: async (
     refresh = false,
   ): Promise<{ scenes: RemoteScene[]; remote: RemoteInfo }> =>
@@ -149,6 +161,7 @@ const onlineScenesApi: typeof localScenesApi = {
   save: (name, json, baseSha, source = `app:${TAB_ID}`) => githubScenes.save(name, json, baseSha, source),
   remove: githubScenes.remove,
   rename: githubScenes.rename,
+  setPublic: githubScenes.setPublic,
   reportState: async () => {},
   sendResult: async () => {},
 };

@@ -270,3 +270,37 @@
 .excalidraw .kq-dialog a.scenes-btn {
   text-decoration: none;
 }
+
+.excalidraw .kq-space {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.excalidraw .scenes-item__public {
+  flex: none;
+  margin-left: auto;
+  padding: 0 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  color: var(--color-primary);
+}
+
+// a read-only space (GitHub: read access, archived, protected branch)
+.excalidraw .kq-readonly {
+  position: fixed;
+  left: 50%;
+  bottom: 4.5rem;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: min(36rem, calc(100% - 2rem));
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--border-radius-lg);
+  background: var(--island-bg-color);
+  box-shadow: var(--shadow-island);
+  color: var(--text-primary-color);
+  font-size: 0.8rem;
+  text-align: center;
+  pointer-events: none;
+}

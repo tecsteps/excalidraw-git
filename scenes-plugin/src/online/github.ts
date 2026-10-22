@@ -3,9 +3,17 @@
 // the user connected, with the same rules (a push must be based on the
 // version GitHub has, agent commits carry a trailer).
 //
+// GitHub is the only source of truth for who may do what: a space is a
+// GitHub account or organization with its private <owner>/kurviq-scenes and
+// (once a scene is made public) its public <owner>/kurviq-public. Whether
+// this user may change them is what GitHub says (permissions, archived,
+// protected branch); Kurviq stores no users, teams or permissions.
+//
 // The browser never sees a long-lived GitHub credential: the Worker keeps
 // the refresh token in an encrypted httpOnly cookie and hands out the
 // short-lived access token (8 h) on request (see online/worker/auth.ts).
+
+import { currentSpace, spaceSuffix } from "../storage";
 
 import type { ApiError, RemoteInfo, RemoteScene } from "../api";
 
@@ -19,17 +27,29 @@ const AGENT_TRAILER = "Scenes-Source: agent";
 // -----------------------------------------------------------------------------
 
 export type GitHubUser = { login: string; avatarUrl: string | null };
-export type RepoChoice = { owner: string; name: string; branch: string; private: boolean };
+export type RepoChoice = {
+  owner: string;
+  name: string;
+  branch: string;
+  private: boolean;
+  /** GitHub lets this user read it, not change it: why */
+  readOnly?: string | null;
+};
 
 export type ConnectionState = {
   /** null = not checked yet */
   user: GitHubUser | null | undefined;
+  /** the space's scenes repository */
   repo: RepoChoice | null;
   /** last token / API problem, if any */
   error: string | null;
+  /** the repository can't be reached any more (access removed, deleted…): why */
+  lost?: string | null;
 };
 
-const REPO_KEY = "kurviq-github-repo";
+/** the space's scenes repository (per space, see ../storage.ts) */
+const repoKeyFor = (space: string) => `kurviq-github-repo${spaceSuffix(space)}`;
+const REPO_KEY = repoKeyFor(currentSpace);
 
 const loadRepo = (): RepoChoice | null => {
   try {
@@ -57,7 +77,7 @@ export const connection = {
   },
   getState: () => state,
   /** connected and a repo is chosen: scenes sync */
-  isActive: () => !!state.user && !!state.repo,
+  isActive: () => !!state.user && !!state.repo && !state.lost,
 };
 
 let token: { value: string; expiresAt: number } | null = null;
@@ -134,7 +154,7 @@ export const connectGitHub = (mode: "login" | "install" = "login") => {
 export const disconnectGitHub = async () => {
   await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
   token = null;
-  listing = null;
+  forgetListings();
   setConnection({ user: null });
 };
 
@@ -146,8 +166,14 @@ export const chooseRepo = (repo: RepoChoice | null) => {
       localStorage.removeItem(REPO_KEY);
     }
   } catch {}
-  listing = null;
-  setConnection({ repo });
+  forgetListings();
+  repoCheckedAt = 0;
+  setConnection({ repo, lost: null });
+};
+
+/** the scenes repository of another space, for the switch (the page reloads into it) */
+export const storeRepoForSpace = (space: string, repo: RepoChoice) => {
+  localStorage.setItem(repoKeyFor(space), JSON.stringify(repo));
 };
 
 // -----------------------------------------------------------------------------
@@ -257,19 +283,25 @@ const blobSha = async (bytes: Uint8Array) => {
 };
 
 // -----------------------------------------------------------------------------
-// scenes in the repo
+// scenes in the space's repositories
 // -----------------------------------------------------------------------------
 
 const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.()-]{0,99}$/u;
 
+/** the private scenes repository of every space */
+export const SCENES_REPO = "kurviq-scenes";
+/** public scenes of a space (created when the first scene is made public) */
+export const PUBLIC_REPO = "kurviq-public";
+
 const requireRepo = () => {
-  if (!state.repo) {
+  if (!state.repo || state.lost) {
     throw notConnectedError();
   }
   return state.repo;
 };
 
-const repoPath = (repo: RepoChoice) => `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+const repoPath = (repo: { owner: string; name: string }) =>
+  `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
 
 const scenePath = (name: string) => {
   if (!NAME_RE.test(name) || name.includes("..")) {
@@ -281,7 +313,6 @@ const scenePath = (name: string) => {
 const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
 type Listing = {
-  repoKey: string;
   head: string | null;
   etag: string | null;
   blobs: Map<string, string>;
@@ -289,10 +320,116 @@ type Listing = {
   fetchedAt: number;
 };
 
-let listing: Listing | null = null;
+const listings = new Map<string, Listing>();
+/** the space's public repository: undefined = not looked up yet, null = none (or not writable) */
+let publicRepo: RepoChoice | null | undefined;
 const remote: RemoteInfo = { online: null, lastFetchAt: null, lastError: null };
 
 const repoKey = (repo: RepoChoice) => `${repo.owner}/${repo.name}#${repo.branch}`;
+
+const forgetListings = () => {
+  listings.clear();
+  publicRepo = undefined;
+};
+
+const readOnlyError = (reason: string) => httpError(403, `Read only: ${reason}`, { readOnly: true });
+
+const requireWritable = () => {
+  const repo = requireRepo();
+  if (repo.readOnly) {
+    throw readOnlyError(repo.readOnly);
+  }
+  return repo;
+};
+
+/** what GitHub says about this user and a repository */
+const accessOf = (data: any): string | null =>
+  data.archived
+    ? `${data.full_name} is archived on GitHub`
+    : data.permissions?.push === false
+    ? `you can read ${data.full_name} on GitHub, but not change it`
+    : null;
+
+const toRepo = (data: any): RepoChoice => ({
+  owner: data.owner.login,
+  name: data.name,
+  branch: data.default_branch || "main",
+  private: !!data.private,
+  readOnly: accessOf(data),
+});
+
+/** GitHub's answer for a repository: the repository, or null (missing / no access) */
+const lookUpRepo = async (owner: string, name: string): Promise<RepoChoice | null> => {
+  const res = await gh(repoPath({ owner, name }));
+  if (res.status === 404 || res.status === 403) {
+    return null;
+  }
+  if (res.status !== 200) {
+    fail(res, `Could not look up ${owner}/${name}`);
+  }
+  return toRepo(res.data);
+};
+
+/** the repository can't be used any more: stop syncing, say why (scenes stay in the browser) */
+const loseAccess = (reason: string): never => {
+  forgetListings();
+  setConnection({ lost: reason });
+  throw notConnectedError();
+};
+
+let repoCheckedAt = 0;
+const REPO_CHECK_MS = 5 * 60_000;
+
+/** mirror GitHub's permissions for the space's repository (at most every few minutes, or now) */
+const checkAccess = async (now = false) => {
+  const repo = requireRepo();
+  if (!now && Date.now() - repoCheckedAt < REPO_CHECK_MS) {
+    return repo;
+  }
+  const res = await gh(repoPath(repo));
+  if (res.status === 404 || res.status === 403) {
+    const message = typeof res.data?.message === "string" ? res.data.message : "";
+    loseAccess(
+      /SAML|SSO/i.test(message)
+        ? `${repo.owner} requires single sign-on: authorize your GitHub sign-in for ${repo.owner} on GitHub`
+        : `Kurviq can't reach ${repo.owner}/${repo.name} any more (deleted, renamed, or access removed on GitHub)`,
+    );
+  }
+  if (res.status !== 200) {
+    fail(res, `Could not check ${repo.owner}/${repo.name}`);
+  }
+  repoCheckedAt = Date.now();
+  // (a protected branch shows only when a push is refused: found again then)
+  const readOnly = accessOf(res.data);
+  if ((readOnly ?? null) !== (repo.readOnly ?? null)) {
+    const next = { ...repo, readOnly };
+    try {
+      localStorage.setItem(REPO_KEY, JSON.stringify(next));
+    } catch {}
+    setConnection({ repo: next });
+    return next;
+  }
+  return repo;
+};
+
+/** a push was refused for good: find out why and mirror it */
+const refused = async (res: GhResponse, what: string): Promise<never> => {
+  const repo = await checkAccess(true);
+  if (repo.readOnly) {
+    throw readOnlyError(repo.readOnly);
+  }
+  const message = typeof res.data?.message === "string" ? res.data.message : "";
+  if (/protected|rule/i.test(message)) {
+    const reason = `the branch ${repo.branch} of ${repo.owner}/${repo.name} is protected on GitHub`;
+    const next = { ...repo, readOnly: reason };
+    try {
+      localStorage.setItem(REPO_KEY, JSON.stringify(next));
+    } catch {}
+    setConnection({ repo: next });
+    throw readOnlyError(reason);
+  }
+  return fail(res, what);
+};
 
 /** last commit date of each scene, in one GraphQL request */
 const commitDates = async (repo: RepoChoice, head: string, names: string[]) => {
@@ -319,57 +456,73 @@ const commitDates = async (repo: RepoChoice, head: string, names: string[]) => {
 };
 
 /**
- * The scenes on GitHub (name -> blob sha). Cheap when nothing changed: the
- * branch head is asked with its ETag (a 304 doesn't count against the rate
- * limit) and the listing is only fetched again when the head moved.
+ * The scenes of one repository (name -> blob sha). Cheap when nothing
+ * changed: the branch head is asked with its ETag (a 304 doesn't count
+ * against the rate limit) and the listing is only fetched again when the
+ * head moved.
  */
-const fetchListing = async (force = false): Promise<Listing> => {
-  const repo = requireRepo();
+const fetchListing = async (repo: RepoChoice, force = false): Promise<Listing> => {
   const key = repoKey(repo);
-  if (listing && listing.repoKey === key && !force && Date.now() - listing.fetchedAt < 5_000) {
-    return listing;
+  const previous = listings.get(key) ?? null;
+  if (previous && !force && Date.now() - previous.fetchedAt < 5_000) {
+    return previous;
   }
-  const previous = listing?.repoKey === key ? listing : null;
-  try {
-    const ref = await gh(`${repoPath(repo)}/git/ref/heads/${encodePath(repo.branch)}`, { etag: previous?.etag });
-    let head: string | null = null;
-    if (ref.status === 304 && previous) {
-      listing = { ...previous, fetchedAt: Date.now() };
-      return markOnline(listing);
-    } else if (ref.status === 200) {
-      head = ref.data.object.sha;
-    } else if (ref.status === 404 || ref.status === 409) {
-      // empty repo, or the branch doesn't exist yet: the first push creates it
-      const repoInfo = await gh(repoPath(repo));
-      if (repoInfo.status !== 200) {
-        fail(repoInfo, `Repository ${repo.owner}/${repo.name} not accessible`);
-      }
-      head = null;
-    } else {
-      fail(ref, `Branch ${repo.branch} of ${repo.owner}/${repo.name} not readable`);
+  const ref = await gh(`${repoPath(repo)}/git/ref/heads/${encodePath(repo.branch)}`, { etag: previous?.etag });
+  let head: string | null = null;
+  if (ref.status === 304 && previous) {
+    const same = { ...previous, fetchedAt: Date.now() };
+    listings.set(key, same);
+    return same;
+  } else if (ref.status === 200) {
+    head = ref.data.object.sha;
+  } else if (ref.status === 404 || ref.status === 409) {
+    // empty repo, or the branch doesn't exist yet: the first push creates it
+    const repoInfo = await gh(repoPath(repo));
+    if (repoInfo.status !== 200) {
+      fail(repoInfo, `Repository ${repo.owner}/${repo.name} not accessible`);
     }
-    const blobs = new Map<string, string>();
-    if (head) {
-      const dir = await gh(`${repoPath(repo)}/contents/${SCENES_DIR}?ref=${head}`);
-      if (dir.status === 200 && Array.isArray(dir.data)) {
-        for (const entry of dir.data) {
-          if (entry.type === "file" && entry.name.endsWith(EXTENSION)) {
-            const name = entry.name.slice(0, -EXTENSION.length);
-            if (NAME_RE.test(name)) {
-              blobs.set(name, entry.sha);
-            }
+  } else {
+    fail(ref, `Branch ${repo.branch} of ${repo.owner}/${repo.name} not readable`);
+  }
+  const blobs = new Map<string, string>();
+  if (head) {
+    const dir = await gh(`${repoPath(repo)}/contents/${SCENES_DIR}?ref=${head}`);
+    if (dir.status === 200 && Array.isArray(dir.data)) {
+      for (const entry of dir.data) {
+        if (entry.type === "file" && entry.name.endsWith(EXTENSION)) {
+          const name = entry.name.slice(0, -EXTENSION.length);
+          if (NAME_RE.test(name)) {
+            blobs.set(name, entry.sha);
           }
         }
-      } else if (dir.status !== 404) {
-        fail(dir, "Scenes folder not readable");
       }
+    } else if (dir.status !== 404) {
+      fail(dir, "Scenes folder not readable");
     }
-    let dates = previous?.dates ?? new Map<string, string>();
-    if (head && head !== previous?.head && blobs.size) {
-      dates = await commitDates(repo, head, [...blobs.keys()]).catch(() => dates);
+  }
+  let dates = previous?.dates ?? new Map<string, string>();
+  if (head && head !== previous?.head && blobs.size) {
+    dates = await commitDates(repo, head, [...blobs.keys()]).catch(() => dates);
+  }
+  const next = { head, etag: ref.status === 200 ? ref.etag : null, blobs, dates, fetchedAt: Date.now() };
+  listings.set(key, next);
+  return next;
+};
+
+/** the space's scenes: its private repository, plus its public one if there is one this user may change */
+const fetchScenes = async (force = false) => {
+  try {
+    const repo = await checkAccess();
+    const main = await fetchListing(repo, force);
+    if (publicRepo === undefined) {
+      const found = await lookUpRepo(repo.owner, PUBLIC_REPO).catch(() => null);
+      publicRepo = found && !found.readOnly ? found : null;
     }
-    listing = { repoKey: key, head, etag: ref.status === 200 ? ref.etag : null, blobs, dates, fetchedAt: Date.now() };
-    return markOnline(listing);
+    const pub = publicRepo ? await fetchListing(publicRepo, force).catch(() => null) : null;
+    remote.online = true;
+    remote.lastFetchAt = new Date().toISOString();
+    remote.lastError = null;
+    return { repo, main, pub };
   } catch (error: any) {
     if (error.offline && !error.notConnected) {
       remote.online = false;
@@ -379,11 +532,13 @@ const fetchListing = async (force = false): Promise<Listing> => {
   }
 };
 
-const markOnline = (value: Listing) => {
-  remote.online = true;
-  remote.lastFetchAt = new Date().toISOString();
-  remote.lastError = null;
-  return value;
+/** where a scene lives (new scenes: the private repository) */
+const locate = async (name: string, force = true) => {
+  const { repo, main, pub } = await fetchScenes(force);
+  if (!main.blobs.has(name) && pub?.blobs.has(name) && publicRepo) {
+    return { repo: publicRepo, listing: pub, sha: pub.blobs.get(name), isPublic: true };
+  }
+  return { repo, listing: main, sha: main.blobs.get(name), isPublic: false };
 };
 
 const checkBase = (name: string, current: string | undefined, baseSha: string | undefined) => {
@@ -397,8 +552,7 @@ const isAgent = (source?: string) => typeof source === "string" && source.starts
 const commitMessage = (text: string, source?: string) =>
   isAgent(source) ? `Agent: ${text[0].toLowerCase()}${text.slice(1)}\n\n${AGENT_TRAILER}` : text;
 
-const readBlob = async (name: string, sha: string) => {
-  const repo = requireRepo();
+const readBlob = async (repo: { owner: string; name: string }, name: string, sha: string) => {
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw httpError(400, "Invalid sha");
   }
@@ -409,8 +563,54 @@ const readBlob = async (name: string, sha: string) => {
   return new TextDecoder().decode(fromBase64(res.data.content));
 };
 
+const putFile = (repo: RepoChoice, path: string, bytes: Uint8Array, message: string, sha?: string) =>
+  gh(`${repoPath(repo)}/contents/${encodePath(path)}`, {
+    method: "PUT",
+    body: { message, content: toBase64(bytes), branch: repo.branch, ...(sha ? { sha } : {}) },
+  });
+
+const deleteFile = (repo: RepoChoice, path: string, message: string, sha: string) =>
+  gh(`${repoPath(repo)}/contents/${encodePath(path)}`, {
+    method: "DELETE",
+    body: { message, sha, branch: repo.branch },
+  });
+
+/** the space's public repository, created if needed */
+const ensurePublicRepo = async (): Promise<RepoChoice> => {
+  const repo = requireWritable();
+  if (publicRepo) {
+    return publicRepo;
+  }
+  const found = await lookUpRepo(repo.owner, PUBLIC_REPO);
+  const createUrl = newRepoUrl(repo.owner, PUBLIC_REPO, false);
+  if (found?.readOnly) {
+    throw httpError(403, `${repo.owner}/${PUBLIC_REPO}: ${found.readOnly}`);
+  }
+  if (!found) {
+    const created = await createRepo(repo.owner, PUBLIC_REPO, { private: false });
+    if (created === "exists") {
+      throw httpError(
+        403,
+        `${repo.owner}/${PUBLIC_REPO} exists, but Kurviq has no access to it: add it to the Kurviq app's repositories on GitHub`,
+      );
+    }
+    if (created === "forbidden") {
+      throw httpError(403, `Kurviq can't create ${repo.owner}/${PUBLIC_REPO}. Create it (public) on GitHub: ${createUrl}`);
+    }
+  }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const ready = found ?? (await lookUpRepo(repo.owner, PUBLIC_REPO));
+    if (ready && !ready.readOnly) {
+      publicRepo = ready;
+      return ready;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw httpError(503, `${repo.owner}/${PUBLIC_REPO} is not ready yet, try again in a moment`);
+};
+
 export const githubScenes = {
-  remoteInfo: (): RemoteInfo => ({ ...remote }),
+  remoteInfo: (): RemoteInfo => ({ ...remote, readOnly: state.repo?.readOnly ?? null }),
 
   list: async (refresh = false): Promise<{ scenes: RemoteScene[]; remote: RemoteInfo }> => {
     if (state.user === undefined) {
@@ -419,14 +619,25 @@ export const githubScenes = {
     if (!connection.isActive()) {
       throw notConnectedError();
     }
+    const entries = (main: Listing | null, pub: Listing | null) => {
+      const scenes: RemoteScene[] = main
+        ? [...main.blobs].map(([name, sha]) => ({ name, sha, updatedAt: main.dates.get(name) ?? null }))
+        : [];
+      for (const [name, sha] of pub?.blobs ?? []) {
+        if (!main?.blobs.has(name)) {
+          scenes.push({ name, sha, updatedAt: pub!.dates.get(name) ?? null, public: true });
+        }
+      }
+      return scenes.sort((a, b) => a.name.localeCompare(b.name));
+    };
     try {
-      const { blobs, dates } = await fetchListing(refresh);
-      const scenes = [...blobs].map(([name, sha]) => ({ name, sha, updatedAt: dates.get(name) ?? null }));
-      scenes.sort((a, b) => a.name.localeCompare(b.name));
-      return { scenes, remote: { ...remote } };
+      const { main, pub } = await fetchScenes(refresh);
+      return { scenes: entries(main, pub), remote: githubScenes.remoteInfo() };
     } catch (error: any) {
-      if (error.offline && !error.notConnected) {
-        return { scenes: listing ? [...listing.blobs].map(([name, sha]) => ({ name, sha, updatedAt: listing!.dates.get(name) ?? null })) : [], remote: { ...remote } };
+      if (error.offline && !error.notConnected && state.repo) {
+        const main = listings.get(repoKey(state.repo)) ?? null;
+        const pub = publicRepo ? listings.get(repoKey(publicRepo)) ?? null : null;
+        return { scenes: entries(main, pub), remote: githubScenes.remoteInfo() };
       }
       throw error;
     }
@@ -435,13 +646,12 @@ export const githubScenes = {
   /** latest version, or a specific one (blob sha) */
   load: async (name: string, sha?: string): Promise<{ json: string; sha: string }> => {
     scenePath(name);
+    const where = await locate(name);
+    sha ??= where.sha;
     if (!sha) {
-      sha = (await fetchListing(true)).blobs.get(name);
-      if (!sha) {
-        throw httpError(404, `Scene not found: ${name}`);
-      }
+      throw httpError(404, `Scene not found: ${name}`);
     }
-    return { json: await readBlob(name, sha), sha };
+    return { json: await readBlob(where.repo, name, sha), sha };
   },
 
   /**
@@ -460,31 +670,26 @@ export const githubScenes = {
     if (typeof owner === "string" && owner !== name) {
       throw httpError(422, `Refused: this content belongs to scene "${owner}", not "${name}". Nothing was written.`);
     }
-    const repo = requireRepo();
+    requireWritable();
     const bytes = new TextEncoder().encode(json);
     const sha = await blobSha(bytes);
     for (let attempt = 0; ; attempt++) {
-      const current = (await fetchListing(true)).blobs.get(name);
+      const { repo, sha: current } = await locate(name);
       checkBase(name, current, baseSha);
       if (current === sha) {
         return { sha, commit: null, changed: false };
       }
-      const res = await gh(`${repoPath(repo)}/contents/${encodePath(path)}`, {
-        method: "PUT",
-        body: {
-          message: commitMessage(`${current ? "Update" : "Add"} scene: ${name}`, source),
-          content: toBase64(bytes),
-          branch: repo.branch,
-          ...(current ? { sha: current } : {}),
-        },
-      });
+      const res = await putFile(repo, path, bytes, commitMessage(`${current ? "Update" : "Add"} scene: ${name}`, source), current);
       if (res.status === 200 || res.status === 201) {
-        listing = null;
+        listings.delete(repoKey(repo));
         return { sha: res.data.content.sha as string, commit: res.data.commit.sha as string, changed: true };
       }
       // someone pushed between our listing and the commit: look again
       if ((res.status === 409 || res.status === 422) && attempt < 2) {
         continue;
+      }
+      if (res.status === 403 || res.status === 404 || res.status === 409 || res.status === 422) {
+        await refused(res, `Push of "${name}" failed`);
       }
       fail(res, `Push of "${name}" failed`);
     }
@@ -493,23 +698,23 @@ export const githubScenes = {
   /** delete a scene; baseSha (optional): only if GitHub still has that version */
   remove: async (name: string, baseSha?: string | null) => {
     const path = scenePath(name);
-    const repo = requireRepo();
+    requireWritable();
     for (let attempt = 0; ; attempt++) {
-      const current = (await fetchListing(true)).blobs.get(name);
+      const { repo, sha: current } = await locate(name);
       if (!current) {
         throw httpError(404, `Scene not found: ${name}`);
       }
       checkBase(name, current, baseSha ?? undefined);
-      const res = await gh(`${repoPath(repo)}/contents/${encodePath(path)}`, {
-        method: "DELETE",
-        body: { message: `Delete scene: ${name}`, sha: current, branch: repo.branch },
-      });
+      const res = await deleteFile(repo, path, `Delete scene: ${name}`, current);
       if (res.status === 200) {
-        listing = null;
+        listings.delete(repoKey(repo));
         return { sha: null };
       }
       if ((res.status === 409 || res.status === 422) && attempt < 2) {
         continue;
+      }
+      if (res.status === 403 || res.status === 404 || res.status === 409 || res.status === 422) {
+        await refused(res, `Delete of "${name}" failed`);
       }
       fail(res, `Delete of "${name}" failed`);
     }
@@ -521,14 +726,15 @@ export const githubScenes = {
     if (from === to) {
       throw httpError(400, "New name is the same as the old one");
     }
-    const repo = requireRepo();
+    requireWritable();
     for (let attempt = 0; ; attempt++) {
-      const { blobs, head } = await fetchListing(true);
-      const sha = blobs.get(from);
+      const { repo, listing, sha } = await locate(from);
+      const { main, pub } = await fetchScenes();
+      const head = listing.head;
       if (!sha || !head) {
         throw httpError(404, `Scene not found: ${from}`);
       }
-      if (blobs.has(to)) {
+      if (main.blobs.has(to) || pub?.blobs.has(to)) {
         throw httpError(409, `A scene named "${to}" already exists on GitHub`, { exists: true });
       }
       const commit = await gh(`${repoPath(repo)}/git/commits/${head}`);
@@ -546,6 +752,9 @@ export const githubScenes = {
         },
       });
       if (tree.status !== 201) {
+        if (tree.status === 403 || tree.status === 404) {
+          await refused(tree, "Rename failed");
+        }
         fail(tree, "Rename failed");
       }
       const next = await gh(`${repoPath(repo)}/git/commits`, {
@@ -560,21 +769,67 @@ export const githubScenes = {
         body: { sha: next.data.sha, force: false },
       });
       if (ref.status === 200) {
-        listing = null;
+        listings.delete(repoKey(repo));
         return { sha, commit: next.data.sha };
       }
       // the branch moved meanwhile (not a fast-forward): try again on top
       if (ref.status === 422 && attempt < 2) {
         continue;
       }
+      if (ref.status === 403 || ref.status === 404 || ref.status === 422) {
+        await refused(ref, "Rename failed");
+      }
       fail(ref, "Rename failed");
     }
+  },
+
+  /**
+   * Make a scene public (move it to <owner>/kurviq-public) or private again
+   * (back to <owner>/kurviq-scenes). It lives in one place only, so later
+   * edits reach the public version; the content (and its blob sha) stays.
+   */
+  setPublic: async (name: string, makePublic: boolean) => {
+    const path = scenePath(name);
+    requireWritable();
+    const from = await locate(name);
+    if (!from.sha) {
+      throw httpError(404, `"${name}" is not on GitHub yet: sync it first`);
+    }
+    if (from.isPublic === makePublic) {
+      return { sha: from.sha };
+    }
+    const target = makePublic ? await ensurePublicRepo() : requireRepo();
+    if ((await fetchListing(target, true)).blobs.has(name)) {
+      throw httpError(409, `${target.owner}/${target.name} already has a scene named "${name}"`);
+    }
+    const bytes = new TextEncoder().encode(await readBlob(from.repo, name, from.sha));
+    const put = await putFile(
+      target,
+      path,
+      bytes,
+      makePublic ? `Make scene public: ${name}` : `Move scene back from ${PUBLIC_REPO}: ${name}`,
+    );
+    if (put.status !== 201 && put.status !== 200) {
+      await refused(put, `Could not move "${name}"`);
+    }
+    const removed = await deleteFile(
+      from.repo,
+      path,
+      makePublic ? `Scene made public (moved to ${PUBLIC_REPO}): ${name}` : `Scene made private (moved to ${SCENES_REPO}): ${name}`,
+      from.sha,
+    );
+    listings.clear();
+    if (removed.status !== 200) {
+      // both have it now; the private copy wins in the listing
+      fail(removed, `"${name}" was copied, but the old copy could not be removed`);
+    }
+    return { sha: from.sha };
   },
 
   /** the version of a scene an agent committed last, from the git history */
   agentVersion: async (name: string) => {
     const path = scenePath(name);
-    const repo = requireRepo();
+    const { repo } = await locate(name, false);
     const res = await gh(
       `${repoPath(repo)}/commits?sha=${encodeURIComponent(repo.branch)}&path=${encodeURIComponent(path)}&per_page=100`,
     );
@@ -598,44 +853,67 @@ export const githubScenes = {
 };
 
 // -----------------------------------------------------------------------------
-// repos the user can pick (where the GitHub App is installed)
+// spaces: the accounts and organizations where the Kurviq app is installed
 // -----------------------------------------------------------------------------
 
-/** the repository Kurviq syncs with: <account>/kurviq-scenes */
-export const SCENES_REPO = "kurviq-scenes";
+export type Space = { owner: string; organization: boolean };
 
-/** <owner>/kurviq-scenes, if Kurviq can write to it */
-export const findScenesRepo = async (owner: string): Promise<RepoChoice | null> => {
-  const res = await gh(`/repos/${encodeURIComponent(owner)}/${SCENES_REPO}`);
-  if (res.status === 404 || res.status === 403) {
-    return null; // missing, or Kurviq has no access to it
-  }
+/** the personal account first, then the organizations (as GitHub lists the app's installations) */
+export const listSpaces = async (): Promise<Space[]> => {
+  const login = state.user?.login;
+  const res = await gh("/user/installations?per_page=100");
   if (res.status !== 200) {
-    fail(res, "Could not look up your repository");
+    fail(res, "Could not list where the Kurviq app is installed");
   }
-  if (res.data.permissions?.push === false) {
-    return null;
+  const spaces: Space[] = login ? [{ owner: login, organization: false }] : [];
+  for (const installation of res.data.installations || []) {
+    const owner = installation.account?.login;
+    if (owner && !spaces.some((space) => space.owner.toLowerCase() === owner.toLowerCase())) {
+      spaces.push({ owner, organization: installation.account?.type === "Organization" });
+    }
   }
-  return { owner: res.data.owner.login, name: res.data.name, branch: res.data.default_branch || "main", private: !!res.data.private };
+  return spaces;
 };
 
-/** is the Kurviq app installed on this account? (needed for any repository access) */
-export const isInstalledFor = async (login: string) => {
+/** <owner>/kurviq-scenes as GitHub shows it to this user (readOnly set when it can't be changed), or null */
+export const findScenesRepo = (owner: string) => lookUpRepo(owner, SCENES_REPO);
+
+/** is the Kurviq app installed on this account or organization? (needed for any repository access) */
+export const isInstalledFor = async (owner: string) => {
   const res = await gh("/user/installations?per_page=100");
   if (res.status !== 200) {
     fail(res, "Could not check the Kurviq app on GitHub");
   }
-  return (res.data.installations || []).some((installation: any) => installation.account?.login === login);
+  return (res.data.installations || []).some(
+    (installation: any) => installation.account?.login?.toLowerCase() === owner.toLowerCase(),
+  );
 };
 
+/** GitHub's "new repository" form, filled in */
+export const newRepoUrl = (owner: string, name = SCENES_REPO, isPrivate = true) =>
+  `https://github.com/new?owner=${encodeURIComponent(owner)}&name=${name}&visibility=${
+    isPrivate ? "private" : "public"
+  }&description=${encodeURIComponent(isPrivate ? "Drawings from Kurviq" : "Public drawings from Kurviq")}`;
+
 /**
- * Create the private repository kurviq-scenes. "exists": it is there, but
- * Kurviq can't see it; "forbidden": the app may not create repositories.
+ * Create a repository for an account or organization. "exists": it is
+ * there, but Kurviq can't see it; "forbidden": not allowed (the app's
+ * permission, or the user's role in the organization).
  */
-export const createScenesRepo = async (): Promise<"created" | "exists" | "forbidden"> => {
-  const res = await gh("/user/repos", {
+const createRepo = async (
+  owner: string,
+  name: string,
+  { private: isPrivate }: { private: boolean },
+): Promise<"created" | "exists" | "forbidden"> => {
+  const personal = owner.toLowerCase() === state.user?.login.toLowerCase();
+  const res = await gh(personal ? "/user/repos" : `/orgs/${encodeURIComponent(owner)}/repos`, {
     method: "POST",
-    body: { name: SCENES_REPO, private: true, auto_init: true, description: "Drawings from Kurviq (https://kurviq.com)" },
+    body: {
+      name,
+      private: isPrivate,
+      auto_init: true,
+      description: isPrivate ? "Drawings from Kurviq (https://kurviq.com)" : "Public drawings from Kurviq (https://kurviq.com)",
+    },
   });
   if (res.status === 201) {
     return "created";
@@ -646,5 +924,57 @@ export const createScenesRepo = async (): Promise<"created" | "exists" | "forbid
   if (res.status === 403 || res.status === 404) {
     return "forbidden";
   }
-  return fail(res, "Could not create the repository");
+  return fail(res, `Could not create ${owner}/${name}`);
+};
+
+/** create <owner>/kurviq-scenes (private) */
+export const createScenesRepo = (owner: string) => createRepo(owner, SCENES_REPO, { private: true });
+
+// -----------------------------------------------------------------------------
+// someone's shared scene (kurviq.com/@owner/scene): public without sign-in,
+// private with the reader's own GitHub access
+// -----------------------------------------------------------------------------
+
+export type SharedScene = {
+  json: string;
+  public: boolean;
+  /** this user may change the owner's scenes (a member of that space) */
+  canEdit: boolean;
+};
+
+/** null: no such scene, or this user may not read it (GitHub doesn't tell which) */
+export const readSharedScene = async (owner: string, name: string): Promise<SharedScene | null> => {
+  const path = scenePath(name);
+  // public scenes: through Kurviq's edge cache (the page preloads this very URL), no sign-in needed
+  const publicCopy = fetch(`/api/public/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`)
+    .then((res) => (res.ok ? res.text() : null))
+    .catch(() => null);
+  // at the same time: is the visitor signed in, and a member of that space?
+  const membership = getToken()
+    .catch(() => null)
+    .then(async (token) =>
+      token
+        ? {
+            signedIn: true,
+            canEdit: await lookUpRepo(owner, SCENES_REPO)
+              .then((repo) => !!repo && !repo.readOnly)
+              .catch(() => false),
+          }
+        : { signedIn: false, canEdit: false },
+    );
+  const json = await publicCopy;
+  if (json !== null) {
+    // don't wait for the membership check longer than a moment
+    const { canEdit } = await Promise.race([membership, new Promise<{ canEdit: false }>((resolve) => setTimeout(() => resolve({ canEdit: false }), 1500))]);
+    return { json, public: true, canEdit };
+  }
+  const { signedIn, canEdit } = await membership;
+  if (!signedIn) {
+    return null;
+  }
+  const file = await gh(`/repos/${encodeURIComponent(owner)}/${SCENES_REPO}/contents/${encodePath(path)}`);
+  if (file.status !== 200 || !file.data?.sha) {
+    return null;
+  }
+  return { json: await readBlob({ owner, name: SCENES_REPO }, name, file.data.sha), public: false, canEdit };
 };

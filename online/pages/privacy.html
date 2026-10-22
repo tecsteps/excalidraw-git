@@ -31,6 +31,13 @@ exchanges and refreshes the tokens and stores nothing. Legal basis: Art. 6(1)(b)
 To end it: "Disconnect" in Kurviq (this also revokes the token), or revoke Kurviq in your GitHub settings under
 Applications. GitHub's privacy statement applies to your GitHub account.</p>
 
+<h2>Shared and public scenes (optional)</h2>
+<p>A scene link (<code>kurviq.com/@owner/scene</code>) contains nothing but the GitHub account and the scene name. Private
+scenes are read by the visitor's browser directly from GitHub, with the visitor's own GitHub access; Kurviq's server is not
+involved. When you make a scene public, it moves to your public GitHub repository <code>kurviq-public</code>: anyone can see
+it there, and it stays in that repository's git history even if you make it private again. Kurviq's server passes public
+scenes on to viewers and Cloudflare keeps a copy in its cache for about a minute; nothing else is stored.</p>
+
 <h2>AI agents (optional)</h2>
 <p>Only if you create an agent link (MCP button) and give it to an AI agent: the agent's requests and your open Kurviq tab's
 answers (e.g. drawing content and images) pass through Kurviq's server on Cloudflare in transit. They are not stored. What
@@ -79,6 +86,14 @@ Szenen dann direkt über GitHubs API in dem von dir gewählten Repository. Kurvi
 und speichert nichts. Rechtsgrundlage: Art. 6 Abs. 1 lit. b DSGVO (Bereitstellung der angefragten Funktion). Beenden:
 „Disconnect" in Kurviq (widerruft auch das Token) oder Kurviq in deinen GitHub-Einstellungen unter Applications entfernen.
 Für dein GitHub-Konto gilt die Datenschutzerklärung von GitHub.</p>
+
+<h2>Geteilte und öffentliche Szenen (optional)</h2>
+<p>Ein Szenen-Link (<code>kurviq.com/@konto/szene</code>) enthält nur das GitHub-Konto und den Namen der Szene. Private
+Szenen liest der Browser des Besuchers direkt bei GitHub, mit dessen eigenem GitHub-Zugang; Kurviqs Server ist daran nicht
+beteiligt. Machst du eine Szene öffentlich, wandert sie in dein öffentliches GitHub-Repository <code>kurviq-public</code>:
+Dort kann sie jeder sehen, und sie bleibt in dessen Git-Historie, auch wenn du sie wieder privat machst. Kurviqs Server
+reicht öffentliche Szenen an Betrachter weiter, Cloudflare hält dafür etwa eine Minute lang eine Kopie im Cache; sonst wird
+nichts gespeichert.</p>
 
 <h2>KI-Agenten (optional)</h2>
 <p>Nur wenn du einen Agent-Link erstellst (MCP-Button) und ihn einem KI-Agenten gibst: Die Anfragen des Agenten und die
