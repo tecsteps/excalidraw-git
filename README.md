@@ -61,6 +61,11 @@ install:
   works. Treat the link like a password; **Make a new link** replaces it.
   Agents find everything they need at <https://kurviq.com/llms.txt>.
 
+- **Public scenes:** <https://kurviq.com/features> shows everything Kurviq
+  adds, as a deck. Files in `online/scenes/` are served at
+  `kurviq.com/<name>`; the first visit puts a local-only copy into the
+  visitor's browser (updated with new versions until the visitor changes it).
+
 Differences to the local install: Excalidraw's live collaboration and
 shareable links (excalidraw.com servers) are switched off, agents need your
 open tab (no headless Chrome), local file paths can't be used by agents, and

@@ -20,6 +20,10 @@ import { pairing } from "./pairing";
 
 import type { RepoChoice } from "./github";
 
+import lilitaLatin from "@excalidraw/excalidraw/fonts/Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2";
+
+import { openPublicScene } from "../router";
+
 import "./online.scss";
 
 const useConnection = () => useSyncExternalStore(connection.subscribe, connection.getState);
@@ -197,6 +201,33 @@ const LinkedInIcon = (
 );
 
 /** the welcome screen's text (injected by ../../vite.config.mts instead of upstream's) */
+// the wordmark's font: Lilita One, which Excalidraw ships for the canvas
+try {
+  document.fonts.add(new FontFace("Kurviq Wordmark", `url(${lilitaLatin})`, { display: "block" }));
+} catch {}
+
+/** Kurviq's wordmark like Excalidraw's: the icon stands in for the "K" */
+export const KurviqLogo = () => (
+  <span className="kq-logo" role="img" aria-label="Kurviq">
+    <svg className="kq-logo__icon" viewBox="0 0 64 64" aria-hidden>
+      <rect width="64" height="64" rx="14" fill="#6965db" />
+      <path d="M20 15c-1 11-1 23 0 34" fill="none" stroke="#fff" strokeWidth="5.5" strokeLinecap="round" />
+      <path
+        d="M45 15C34 22 27 28 21.5 32.5 31 37 39 42 46 49.5"
+        fill="none"
+        stroke="#e0dfff"
+        strokeWidth="5.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+    <span className="kq-logo__text" aria-hidden>
+      URVIQ
+    </span>
+  </span>
+);
+
+/** on the welcome screen (injected by ../../vite.config.mts), instead of upstream's storage warning */
 export const WelcomeHeading = () => {
   const { user } = useConnection();
   return (
@@ -206,8 +237,16 @@ export const WelcomeHeading = () => {
         <a href="https://excalidraw.com" target="_blank" rel="noopener noreferrer">
           Excalidraw
         </a>{" "}
-        that adds what I always wanted: scenes, slides, formatted text, sync with GitHub and AI agents that draw
-        with you.
+        that adds what I always wanted:{" "}
+        <a
+          href="/features"
+          onClick={(event) => {
+            event.preventDefault();
+            openPublicScene("features");
+          }}
+        >
+          kurviq.com/features
+        </a>
       </p>
       <p className="kq-welcome__storage">
         {user

@@ -411,7 +411,7 @@ const KURVIQ_ICONS = `<link rel="icon" href="/favicon.ico" sizes="48x48" />
  */
 const KURVIQ_STATIC = `<div id="root"><main class="kq-static" style="max-width:40rem;margin:12vh auto;padding:0 1.5rem;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#555;line-height:1.55">
       <h1 style="color:#1f1d3a;font-size:2rem;margin:0 0 .5rem">Kurviq: hand-drawn diagrams, synced with GitHub</h1>
-      <p>Kurviq is a free online whiteboard built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a>. Sketch diagrams with a hand-drawn look, organise them as named scenes, present them as slides and write formatted text. No account needed: your drawings stay in your browser.</p>
+      <p>Kurviq is a free online whiteboard built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a>. Sketch diagrams with a hand-drawn look, organise them as named scenes, present them as slides and write formatted text. No account needed: your drawings stay in your browser. <a href="/features">All features</a>.</p>
       <h2 style="font-size:1.1rem;color:#1f1d3a">Sync with GitHub, together</h2>
       <p>Connect GitHub to keep your scenes in a repository of your choice, on all your devices. Several people can work in the same repository; changes are merged element by element.</p>
       <h2 style="font-size:1.1rem;color:#1f1d3a">AI agents draw with you</h2>
@@ -502,12 +502,12 @@ const kurviqOnline = () => ({
     }
     if (file.endsWith("/excalidraw-app/components/AppWelcomeScreen.tsx")) {
       return patch("AppWelcomeScreen.tsx", [
-        ["<WelcomeScreen.Center.Logo />", '<WelcomeScreen.Center.Logo><span className="kq-welcome-logo">Kurviq</span></WelcomeScreen.Center.Logo>'],
+        ["<WelcomeScreen.Center.Logo />", '<WelcomeScreen.Center.Logo><KurviqLogo /></WelcomeScreen.Center.Logo>'],
         ["{!isExcalidrawPlusSignedUser && (", "{false && ("],
         ["<WelcomeScreen.Center.MenuItemHelp />", "<WelcomeScreen.Center.MenuItemHelp />\n          <WelcomeConnectGitHub />"],
         // Kurviq's own words instead of upstream's storage warning
         ["{headingContent}", "<WelcomeHeading />"],
-        [/^/, `import { WelcomeConnectGitHub, WelcomeHeading } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
+        [/^/, `import { KurviqLogo, WelcomeConnectGitHub, WelcomeHeading } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
       ]);
     }
     // bottom right: Kurviq's legal links instead of the shield, whose tooltip
@@ -572,11 +572,15 @@ const kurviqOnline = () => ({
           .replace("{{content}}", readFileSync(path.join(ONLINE_DIR, `pages/${page}.html`), "utf8")),
       });
     }
+    // public scenes (kurviq.com/<name>, see src/router.ts)
+    for (const file of readdirSync(path.join(ONLINE_DIR, "scenes"))) {
+      this.emitFile({ type: "asset", fileName: `scenes/${file}`, source: readFileSync(path.join(ONLINE_DIR, "scenes", file)) });
+    }
     this.emitFile({ type: "asset", fileName: "robots.txt", source: `User-agent: *\nAllow: /\nDisallow: /auth/\nDisallow: /mcp/\nDisallow: /live/\n\nSitemap: ${SITE}/sitemap.xml\n` });
     this.emitFile({
       type: "asset",
       fileName: "sitemap.xml",
-      source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${SITE}/</loc><lastmod>${new Date().toISOString().slice(0, 10)}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n`,
+      source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${SITE}/</loc><lastmod>${new Date().toISOString().slice(0, 10)}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>\n  <url><loc>${SITE}/features</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>\n</urlset>\n`,
     });
   },
   // after upstream's public files were copied: Kurviq's icons and images instead

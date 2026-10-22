@@ -171,11 +171,26 @@
   }
 }
 
-.excalidraw .kq-welcome-logo {
-  font-family: "Excalifont", "Virgil", sans-serif;
+.excalidraw .kq-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12em;
   font-size: 3rem;
-  color: var(--color-primary);
-  letter-spacing: 0.02em;
+  line-height: 1;
+
+  .kq-logo__icon {
+    width: 0.92em;
+    height: 0.92em;
+    flex: none;
+  }
+
+  .kq-logo__text {
+    font-family: "Kurviq Wordmark", "Lilita One", sans-serif;
+    color: var(--color-logo-text);
+    letter-spacing: 0.01em;
+    // Lilita's caps sit a little high in the em box
+    transform: translateY(0.04em);
+  }
 }
 
 .excalidraw .kq-switcher-github {
