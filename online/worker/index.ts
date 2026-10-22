@@ -178,6 +178,8 @@ const handleMcp = async (request: Request, env: Env, key: string) => {
     mode: "detached",
     appHint: app,
     githubOptional: true,
+    // scenes full of images: read without their bytes (CPU budget), the tab fills them in for pictures
+    leanReads: true,
     skill: kurviqSkill(app, `${app}/mcp/${key}/upload`),
     unreachable,
     serverFetch: (pathname: string, init: RequestInit = {}) => {

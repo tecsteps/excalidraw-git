@@ -38,6 +38,7 @@ import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
 import { addFont, customFonts, fontFamilyValue, fontFromGoogle } from "./fonts";
+import { leanScene } from "./leanFiles";
 import { keepUpload, withUploads } from "./uploads";
 import { createReceiver, sendMessage } from "./online/frames";
 import { connection } from "./online/github";
@@ -650,8 +651,10 @@ const runCommand = async (command: Command) => {
       return serveRequest(command.request);
     case "status":
       return status();
-    case "local-read":
-      return readLocalScene(command);
+    case "local-read": {
+      const read = await readLocalScene(command);
+      return (command as any).lean ? { ...read, file: leanScene(read.file) } : read;
+    }
     case "local-edit": {
       const run = agentEdits.then(() => editLocalScene(command, convertMcpElements));
       agentEdits = run.catch(() => {});

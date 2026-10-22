@@ -56,6 +56,12 @@ export const createScenesMcp = ({
   livePreview = true,
   name = "Kurviq",
   githubOptional = false,
+  /**
+   * reads that only look at a scene take it without image bytes (Kurviq
+   * online: the tab that serves it keeps the images and fills them in for
+   * pictures)
+   */
+  leanReads = false,
 }) => {
   const APP_HINT = appHint;
   const MODE = mode;
@@ -138,9 +144,17 @@ export const createScenesMcp = ({
 
   const sceneUrl = (name) => `/api/scenes/${encodeURIComponent(name)}`;
 
+  /**
+   * Kurviq online: reads that only look at a scene take it "lean" (images
+   * without their bytes; the user's tab keeps them and fills them in for
+   * pictures), so scenes full of images stay within the server's CPU budget.
+   */
+  const LEAN = !!leanReads;
+  const leanQuery = (lean) => (lean && LEAN ? "?lean=1" : "");
+
   /** a scene on GitHub plus its blob sha (null if it doesn't exist) */
-  const loadSceneWithSha = async (name) => {
-    const res = await serverFetch(sceneUrl(name)).catch(() => {
+  const loadSceneWithSha = async (name, { lean = false } = {}) => {
+    const res = await serverFetch(`${sceneUrl(name)}${leanQuery(lean)}`).catch(() => {
       throw new Error(unreachable);
     });
     if (res.status === 404) {
@@ -152,9 +166,9 @@ export const createScenesMcp = ({
     return { file: await res.json(), sha: res.headers.get("x-scene-sha") };
   };
 
-  const loadSceneFile = async (name) => {
+  const loadSceneFile = async (name, { lean = false } = {}) => {
     try {
-      return JSON.parse(await call(sceneUrl(name)));
+      return JSON.parse(await call(`${sceneUrl(name)}${leanQuery(lean)}`));
     } catch (error) {
       if (error.status === 404) {
         return null;
@@ -173,16 +187,16 @@ export const createScenesMcp = ({
   const LOCAL_NOTE =
     "Local-only scene: it exists only in the user's browser and is never synced to GitHub (the user decides if it ever is). You read and edit it through their app, which must be open.";
 
-  const loadLocalScene = (name, since) =>
-    appCommand({ type: "local-read", name, targetScene: name, ...(since ? { since } : {}) });
+  const loadLocalScene = (name, since, { lean = false } = {}) =>
+    appCommand({ type: "local-read", name, targetScene: name, ...(since ? { since } : {}), ...(lean && LEAN ? { lean: true } : {}) });
 
   /** a scene's content: from the user's browser if it is local-only, else from GitHub */
-  const loadAnyScene = async (name) => {
+  const loadAnyScene = async (name, { lean = false } = {}) => {
     const flushed = await flushUser(name);
     if (isLocalOnly(flushed)) {
-      return { local: true, file: (await loadLocalScene(name)).file };
+      return { local: true, file: (await loadLocalScene(name, undefined, { lean })).file };
     }
-    return { local: false, file: await loadSceneFile(name) };
+    return { local: false, file: await loadSceneFile(name, { lean }) };
   };
 
   const notFound = (name) =>
@@ -404,7 +418,7 @@ export const createScenesMcp = ({
         annotations: { readOnlyHint: true },
       },
       tool(async ({ name, summary, region, elementIds, textsOffset }) => {
-        const { file, local } = await loadAnyScene(name);
+        const { file, local } = await loadAnyScene(name, { lean: true });
         if (!file) {
           throw notFound(name);
         }
@@ -713,7 +727,8 @@ export const createScenesMcp = ({
     // ---------------------------------------------------------------------------
 
     /** a specific version (blob sha) of a scene */
-    const loadVersion = async (name, sha) => JSON.parse(await call(`${sceneUrl(name)}?sha=${encodeURIComponent(sha)}`));
+    const loadVersion = async (name, sha) =>
+      JSON.parse(await call(`${sceneUrl(name)}?sha=${encodeURIComponent(sha)}${LEAN ? "&lean=1" : ""}`));
 
     /** user's sync state for this scene, after the flush — so the agent knows what it sees */
     const userSyncNote = (flushed) => {
@@ -775,7 +790,7 @@ export const createScenesMcp = ({
 
     /** a local-only scene from the user's browser, shaped like a GitHub version */
     const localVersion = async (name, since) => {
-      const { file, revision, base } = await loadLocalScene(name, since);
+      const { file, revision, base } = await loadLocalScene(name, since, { lean: true });
       return {
         file,
         sha: revision,
@@ -808,7 +823,7 @@ export const createScenesMcp = ({
         tool(async ({ name, view, changesOnly, summary, region, elementIds, since, textsOffset }) => {
           const flushed = await flushUser(name);
           const local = isLocalOnly(flushed);
-          const current = local ? await localVersion(name, since) : await loadSceneWithSha(name);
+          const current = local ? await localVersion(name, since) : await loadSceneWithSha(name, { lean: true });
           if (!current) {
             throw notFound(name);
           }
@@ -877,7 +892,7 @@ export const createScenesMcp = ({
 
           // what did the user do since the agent's version?
           const local = isLocalOnly(await flushUser(name));
-          const before = local ? await localVersion(name, basedOn) : await loadSceneWithSha(name);
+          const before = local ? await localVersion(name, basedOn) : await loadSceneWithSha(name, { lean: true });
           if (!before) {
             throw new Error(`Scene "${name}" not found on GitHub. Create new scenes with create_view + save_scene.`);
           }
@@ -976,16 +991,13 @@ export const createScenesMcp = ({
           scene = { elements: checkpoint.elements.filter((el) => !PSEUDO_TYPES.has(el.type)) };
           source = `checkpoint ${checkpointId}`;
         } else if (name) {
-          const { file, local } = await loadAnyScene(name);
+          const { file, local } = await loadAnyScene(name, { lean: true });
           if (!file) {
             throw notFound(name);
           }
           scene = { elements: file.elements || [], files: file.files || {}, appState: file.appState || {} };
           source = `scene "${name}" (${local ? "local only, from the user's browser" : "repo"})`;
         } else {
-          if (MODE === "detached") {
-            throw new Error("Pass name (or checkpointId). app_status tells you which scene the user has open.");
-          }
           const state = await callJson("/api/app/state");
           if (!state.connected) {
             throw new Error("No scene name given and the app is not open — pass name or checkpointId");
@@ -1018,7 +1030,7 @@ export const createScenesMcp = ({
         annotations: { readOnlyHint: true },
       },
       tool(async ({ name }) => {
-        const { file } = await loadAnyScene(name);
+        const { file } = await loadAnyScene(name, { lean: true });
         if (!file) {
           throw notFound(name);
         }

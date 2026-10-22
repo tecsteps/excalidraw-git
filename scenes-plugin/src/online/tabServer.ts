@@ -4,6 +4,7 @@
 // WebSocket and are served with the GitHub API (./github.ts) — the agent's
 // commits are made with this browser's GitHub connection.
 
+import { leanScene } from "../leanFiles";
 import { scenesController } from "../controller";
 
 import { connection, githubScenes } from "./github";
@@ -68,7 +69,9 @@ const route = async ({ method, path, headers = {}, body = "" }: TabRequest): Pro
     const name = decodeURIComponent(match[1]);
     if (method === "GET") {
       const scene = await githubScenes.load(name, url.searchParams.get("sha") || undefined);
-      return { status: 200, headers: { "Content-Type": "application/json", "X-Scene-Sha": scene.sha }, body: scene.json };
+      // ?lean: without image bytes (the agent's server reads it; this tab keeps the images)
+      const body = url.searchParams.has("lean") ? JSON.stringify(leanScene(JSON.parse(scene.json))) : scene.json;
+      return { status: 200, headers: { "Content-Type": "application/json", "X-Scene-Sha": scene.sha }, body };
     }
     const baseHeader = header("X-Base-Sha");
     const baseSha = baseHeader === undefined ? undefined : String(baseHeader).trim();

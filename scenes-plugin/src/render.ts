@@ -2,6 +2,8 @@
 // agents can look at scenes without any browser automation.
 
 import { registerSceneFonts } from "./fonts";
+import { scenesController } from "./controller";
+import { fillFiles } from "./leanFiles";
 import {
   Fonts,
   exportToBlob,
@@ -181,7 +183,8 @@ export const renderScene = async (
     elements = needsConversion
       ? await convert(raw)
       : restoreElements(raw, null, { repairBindings: true });
-    files = command.scene.files || {};
+    // a lean scene (from the agent's server) gets its images back from this tab
+    files = await fillFiles(command.scene.files, scenesController.getApi()?.getFiles());
     background = command.scene.appState?.viewBackgroundColor || "#ffffff";
   } else {
     ({ elements, files, background } = open());
