@@ -1,6 +1,7 @@
 // Renders a scene (or part of it) to PNG with Excalidraw's own exporter, so
 // agents can look at scenes without any browser automation.
 
+import { registerSceneFonts } from "./fonts";
 import {
   Fonts,
   exportToBlob,
@@ -171,6 +172,8 @@ export const renderScene = async (
   let files: BinaryFiles;
   let background: string;
   if (command.scene) {
+    // custom fonts first: the picture must show them
+    await registerSceneFonts(command.scene as any);
     const raw = command.scene.elements || [];
     const needsConversion = raw.some(
       (el: any) => el?.label !== undefined || el?.version === undefined,

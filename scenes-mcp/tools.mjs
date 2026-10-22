@@ -1036,7 +1036,7 @@ export const createScenesMcp = ({
       "measure_text",
       {
         description: `Measure text BEFORE placing it, exactly as Excalidraw will (real fonts): width and height in px for each item, and with maxWidth the wrapped lines. Use it to size boxes, table cells and chart labels, or to right-align / center text without guessing.
-  fontFamily: 5 Excalifont (hand-drawn, default), 6 Nunito, 7 Lilita One, 8 Comic Shanns, 1 Virgil, 2 Helvetica, 3 Cascadia.`,
+  fontFamily: 5 Excalifont (hand-drawn, default), 6 Nunito, 7 Lilita One, 8 Comic Shanns, 1 Virgil, 2 Helvetica, 3 Cascadia, or the name of a font the user added (app_status → customFonts, e.g. "Geist").`,
         inputSchema: {
           items: z
             .array(
@@ -1044,7 +1044,7 @@ export const createScenesMcp = ({
                 text: z.string().optional(),
                 markdown: z.string().optional().describe("formatted text instead of text (see read_me: Formatted text)"),
                 fontSize: z.number().optional().describe("default 20"),
-                fontFamily: z.number().optional(),
+                fontFamily: z.union([z.number(), z.string()]).optional(),
                 lineHeight: z.number().optional().describe("default: the font's"),
                 maxWidth: z.number().optional().describe("wrap at this width"),
               }),

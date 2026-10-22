@@ -19,6 +19,8 @@ import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
 import { PresentationOverlay } from "./present";
+import { loadFontLibrary } from "./fonts";
+import { AddFontOverlay } from "./fontsUI";
 import { PublicSceneOverlay } from "./publicScene";
 import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
@@ -104,6 +106,8 @@ const useAttachController = () => {
   const api = useExcalidrawAPI();
   useEffect(() => {
     if (api) {
+      // fonts the user added (also for the scene that is about to show)
+      loadFontLibrary();
       scenesController.attach(api);
       connectLive();
       if (!IS_RENDERER) {
@@ -1050,6 +1054,7 @@ export const ScenesSidebar = () => {
     <PresentationOverlay />
     <SlideSorterOverlay />
     <PublicSceneOverlay />
+    <AddFontOverlay />
     {IS_ONLINE && <RepoSetupDialog />}
     {IS_ONLINE && <ReadOnlyGuard />}
     </>

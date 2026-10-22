@@ -7,6 +7,7 @@ import clsx from "clsx";
 
 import { scenesController } from "./controller";
 import { deck } from "./deck";
+import { customFonts } from "./fonts";
 import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { IS_ONLINE } from "./api";
 import { PresentationLink } from "./online/ui";
@@ -414,6 +415,8 @@ const ThemeForm = () => {
       </section>
     );
   }
+  // fonts the user added are deck fonts too
+  useSyncExternalStore(customFonts.subscribe, customFonts.version);
   const select = <K extends keyof DeckTheme>(key: K, options: Array<[string, DeckTheme[K]]>) => (
     <select
       className="slides-input"
@@ -465,7 +468,7 @@ const ThemeForm = () => {
       </p>
       <label className="slides-field">
         <span>Font</span>
-        {select("fontFamily", FONTS)}
+        {select("fontFamily", [...FONTS, ...customFonts.list().map((font): [string, number] => [font.family, font.id])])}
       </label>
       <div className="slides-grid">
         <label className="slides-field">

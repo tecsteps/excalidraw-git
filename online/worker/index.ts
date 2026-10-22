@@ -6,6 +6,7 @@
 //                    through the pairing's open Kurviq tab
 //   /llms.txt        how agents use Kurviq
 //   /api/public/…    public scenes, cached (./shared.ts)
+//   /api/fonts/…     fonts from Google Fonts for "Add font", cached (./fonts.ts)
 //   /@owner/scene    a shared scene: the app, titled for link previews (./shared.ts)
 //   everything else  the app (static assets, built by `npm run build:online`)
 
@@ -16,6 +17,7 @@ import { createScenesMcp } from "../../scenes-mcp/tools.mjs";
 
 import llmsTxt from "../llms.txt";
 import { handleAuth } from "./auth";
+import { handleFonts } from "./fonts";
 import { handlePublicApi, handleSharedPage } from "./shared";
 import { kurviqSkill } from "./skill";
 
@@ -168,6 +170,10 @@ export default {
       });
     }
 
+    const fonts = await handleFonts(request, ctx);
+    if (fonts) {
+      return fonts;
+    }
     const publicApi = handlePublicApi(request, ctx);
     if (publicApi) {
       return publicApi;

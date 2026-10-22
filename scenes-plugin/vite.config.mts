@@ -97,6 +97,28 @@ const injectScenesPlugin = () => ({
 
 const TEXT_PADDING_ENTRY = path.resolve(HERE, "src/textPadding.tsx");
 
+const FONTS_UI_ENTRY = path.resolve(HERE, "src/fontsUI.tsx");
+
+/** "Add font…" at the bottom of Excalidraw's font picker (custom fonts: src/fonts.ts) */
+const customFonts = () => ({
+  name: "excalidraw-scenes-custom-fonts",
+  enforce: "pre" as const,
+  transform(code: string, id: string) {
+    const file = id.replace(/\\/g, "/").split("?")[0];
+    if (!file.endsWith("/packages/excalidraw/components/FontPicker/FontPickerList.tsx")) {
+      return null;
+    }
+    const anchor = "        </ScrollableList>\n";
+    if (code.split(anchor).length !== 2) {
+      throw new Error("[excalidraw-scenes] custom fonts: FontPickerList.tsx changed upstream. Update scenes-plugin/vite.config.mts.");
+    }
+    return {
+      code: `import { AddFontButton as __KurviqAddFont } from ${JSON.stringify(FONTS_UI_ENTRY)};\n${code.replace(anchor, `${anchor}        <__KurviqAddFont />\n`)}`,
+      map: null,
+    };
+  },
+});
+
 /**
  * Text padding per shape (`customData.textPadding`, default 5px): Excalidraw
  * lays out a shape's text with a fixed BOUND_TEXT_PADDING. These patches make
@@ -643,6 +665,7 @@ const kurviqOnline = () => ({
  *   - frame-src https:  embeds in scenes (YouTube, Figma …; Excalidraw
  *     keeps its own allowlist of what may be embedded)
  *   - esm.sh: Excalidraw's fallback for fonts it can't find on this site
+ *   - connect-src data: imported fonts are read from their data URLs for export
  */
 const securityHeaders = (html: string) => {
   const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)]
@@ -654,7 +677,8 @@ const securityHeaders = (html: string) => {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data: https://esm.sh",
-    "connect-src 'self' https://api.github.com https://libraries.excalidraw.com https://esm.sh",
+    // data: imported fonts are subset for SVG / PDF export from their data URLs
+    "connect-src 'self' data: https://api.github.com https://libraries.excalidraw.com https://esm.sh",
     "worker-src 'self' blob: data:",
     "frame-src https:",
     "media-src 'self' data: blob:",
@@ -760,6 +784,7 @@ export default async (configEnv: { mode: string; command: string }) => {
       injectScenesPlugin(),
       textPadding(),
       richText(),
+      customFonts(),
       sceneUrls(),
       ...(online ? [kurviqOnline(), kurviqPwa()] : []),
       ...upstreamPlugins,

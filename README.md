@@ -331,6 +331,21 @@ Excalidraw apps still see the text. Exports (PNG, SVG, PDF) show the
 formatting, and in SVG and PDF text stays text, links included. Agents
 write formatted text as markdown (see the skill).
 
+### Fonts
+
+Besides Excalidraw's own fonts, any font can be added: **font picker →
+"+ Add font…"**, either by name from Google Fonts (Geist, JetBrains Mono,
+Inter …; on kurviq.com fetched through the Worker, so browsers never talk to
+Google) or as a file (.woff2, .woff, .ttf, .otf; only fonts you may share).
+A font gets a number derived from its name (the same everywhere), and a
+scene that uses it carries the font in a `kurviqFonts` field of its file,
+so it looks the same for teammates, in shared and public links, in PDFs and
+for agents. This browser keeps every font it has seen for its other scenes;
+the deck style in the Slides sidebar offers them too. Agents use them by
+name (`"fontFamily": "Geist"`); `app_status` lists them. One style per font
+(regular); bold and italic are drawn by the browser. Code:
+`scenes-plugin/src/fonts.ts`, `fontsUI.tsx`, `online/worker/fonts.ts`.
+
 ### Text padding
 
 Shapes with text (rectangle, ellipse, diamond) have a **Text padding**

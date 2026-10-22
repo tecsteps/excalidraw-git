@@ -20,6 +20,7 @@ import {
   updateBoundElements,
 } from "@excalidraw/element";
 
+import { registerSceneFonts, withFonts } from "./fonts";
 import { scenesApi } from "./api";
 import { applyMarkdownUpdate } from "./richText/agent";
 import { placeOnSlides, syncTemplate } from "./slides";
@@ -411,6 +412,7 @@ export const editSceneOnGitHub = async (
   for (let attempt = 1; ; attempt++) {
     const latest = await scenesApi.load(command.name);
     const data = JSON.parse(latest.json);
+    await registerSceneFonts(data);
     const edit = await applyEdits(
       restoreElements(data.elements || [], null, { repairBindings: true }),
       command,
@@ -418,7 +420,10 @@ export const editSceneOnGitHub = async (
     );
     const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
     const json = withSceneName(
-      serializeAsJSON(elements, data.appState || {}, { ...(data.files || {}), ...(command.files || {}) }, "local"),
+      withFonts(
+        serializeAsJSON(elements, data.appState || {}, { ...(data.files || {}), ...(command.files || {}) }, "local"),
+        elements,
+      ),
       command.name, // ties the content to this scene
     );
     try {
@@ -486,6 +491,7 @@ export const editLocalScene = async (
   convert: (elements: any[]) => Promise<any[]>,
 ) => {
   const data = JSON.parse(await scenesController.localOnlyJson(command.name));
+  await registerSceneFonts(data);
   const edit = await applyEdits(
     restoreElements(data.elements || [], null, { repairBindings: true }),
     command,
@@ -493,7 +499,7 @@ export const editLocalScene = async (
   );
   const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
   const files = { ...(data.files || {}), ...(command.files || {}) };
-  const json = withSceneName(serializeAsJSON(elements, data.appState || {}, files, "local"), command.name);
+  const json = withSceneName(withFonts(serializeAsJSON(elements, data.appState || {}, files, "local"), elements), command.name);
   await scenesController.writeLocalOnly(command.name, json);
   await setAgentBaseline(command.name, { at: new Date().toISOString(), action: "edit", elements });
   return {

@@ -37,6 +37,7 @@ import { applyMarkdown } from "./richText/agent";
 import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
+import { customFonts, fontFamilyValue } from "./fonts";
 import { createReceiver, sendMessage } from "./online/frames";
 import { connection } from "./online/github";
 import { pairing } from "./online/pairing";
@@ -144,13 +145,13 @@ const measureTexts = async (
   await Fonts.loadElementsFonts(
     items.map((item) => ({
       type: "text",
-      fontFamily: item.fontFamily ?? FONT_FAMILY.Excalifont,
+      fontFamily: (fontFamilyValue(item.fontFamily) as number) ?? FONT_FAMILY.Excalifont,
       text: item.text,
       originalText: item.text,
     })) as any,
   ).catch(() => []);
   return items.map((item) => {
-    const fontFamily = item.fontFamily ?? FONT_FAMILY.Excalifont;
+    const fontFamily = (fontFamilyValue(item.fontFamily) as number) ?? FONT_FAMILY.Excalifont;
     const fontSize = item.fontSize ?? DEFAULT_FONT_SIZE;
     const font = getFontString({ fontSize, fontFamily } as any);
     const lineHeight = (item.lineHeight ?? getLineHeight(fontFamily as any)) as any;
@@ -177,7 +178,30 @@ const measureTexts = async (
   });
 };
 
-const convertMcpElements = async (input: any[], { deck }: { deck?: string } = {}) => {
+/** an agent may name a font ("Geist") where Excalidraw stores its number */
+const withFontIds = (el: any) => {
+  if (!el || typeof el !== "object") {
+    return el;
+  }
+  const next = { ...el };
+  if (typeof next.fontFamily === "string") {
+    next.fontFamily = fontFamilyValue(next.fontFamily);
+  }
+  if (typeof next.label?.fontFamily === "string") {
+    next.label = { ...next.label, fontFamily: fontFamilyValue(next.label.fontFamily) };
+  }
+  const theme = next.customData?.slides?.theme;
+  if (typeof theme?.fontFamily === "string") {
+    next.customData = {
+      ...next.customData,
+      slides: { ...next.customData.slides, theme: { ...theme, fontFamily: fontFamilyValue(theme.fontFamily) } },
+    };
+  }
+  return next;
+};
+
+const convertMcpElements = async (raw: any[], { deck }: { deck?: string } = {}) => {
+  const input = raw.map(withFontIds);
   const theme = themeOf(input);
   const elements = placeOnSlides(input.map(applyMarkdown), input).map((el) => (el ? withThemeDefaults(el, theme) : el));
   // text is measured during conversion — the fonts (incl. the characters
@@ -443,6 +467,8 @@ const status = () => {
     current,
     dirty,
     autoSync,
+    // fonts the user added (besides Excalidraw's own): usable by name as fontFamily
+    customFonts: customFonts.list().map((font) => font.family),
     github: sync.notConnected
       ? "not connected (all scenes stay in the user's browser, local-only)"
       : sync.readOnly
@@ -488,6 +514,9 @@ const refuseIfReadOnly = (name: string | null | undefined) => {
 let agentEdits: Promise<unknown> = Promise.resolve();
 
 const runCommand = async (command: Command) => {
+  if (Array.isArray((command as any).update)) {
+    (command as any).update = (command as any).update.map(withFontIds);
+  }
   switch (command.type) {
     case "flush":
       return scenesController.flush(command.name);

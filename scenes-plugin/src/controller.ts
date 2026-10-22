@@ -20,6 +20,7 @@ import {
 } from "@excalidraw/excalidraw";
 import { hashElementsVersion, hashString } from "@excalidraw/element";
 
+import { mergeFontLists, registerSceneFonts, withFonts } from "./fonts";
 import { scenesApi, SCENE_NAME_RE } from "./api";
 import { changedFields, live, mergeElements, MERGE_VERSION, newestWins } from "./merge";
 import type { ClashChoice } from "./merge";
@@ -703,7 +704,7 @@ class ScenesController {
     const elements = api.getSceneElements();
     const appState = api.getAppState();
     return {
-      json: serializeAsJSON(elements, appState, api.getFiles(), "local"),
+      json: withFonts(serializeAsJSON(elements, appState, api.getFiles(), "local"), elements),
       hash: sceneHash(elements, appState),
       isEmpty: elements.length === 0,
     };
@@ -738,6 +739,8 @@ class ScenesController {
   private applyScene(json: string | null, name: string | null, { keepView = false } = {}) {
     const api = this.requireApi();
     const data = json ? JSON.parse(json) : {};
+    // its custom fonts (the canvas redraws once they are loaded)
+    registerSceneFonts(data);
     const elements = restoreElements(data.elements, null, { repairBindings: true });
     const restoredAppState = restoreAppState(data.appState, null);
     const files: BinaryFiles = data.files || {};
@@ -1497,10 +1500,12 @@ class ScenesController {
       return null;
     }
 
+    await registerSceneFonts(theirsData);
     const mergedJson = JSON.stringify({
       ...mine,
       elements: merged.elements,
       files: { ...(theirsData.files || {}), ...(mine.files || {}) },
+      kurviqFonts: mergeFontLists(mine.kurviqFonts, theirsData.kurviqFonts),
     });
     if (!(await unchanged())) {
       return null;

@@ -183,6 +183,12 @@ Every frame of a scene is a slide; the user presents with the "Slides" button
   center or the right edge, following `textAlign`.
 - Closed, filled lines (area charts, outlines): `"type": "line"` with the
   last point equal to the first, `"polygon": true` and a `backgroundColor`.
+- Fonts: besides Excalidraw's own (`fontFamily` 5 Excalifont, 6 Nunito,
+  7 Lilita One, 8 Comic Shanns, 2 Helvetica, 3 Cascadia), the user can add
+  any font (Google Fonts or a file: font picker → "Add font…").
+  `app_status` lists them as `customFonts`; use one by name, e.g.
+  `"fontFamily": "Geist"` (also in labels and the deck theme). A font that
+  isn't listed must be added by the user first.
 - Theme: in a deck, text (and labels) without `fontFamily` / `strokeColor`
   get the theme's font and text color, and follow when the user changes the
   deck style. Use the theme's `titleSize` / `bodySize` for titles and body.

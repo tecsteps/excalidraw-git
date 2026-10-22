@@ -15,6 +15,7 @@ import type { BinaryFiles } from "@excalidraw/excalidraw/types";
 import { IS_ONLINE } from "./api";
 import { scenesController } from "./controller";
 import { connectGitHub, connection, readSharedScene } from "./online/github";
+import { registerSceneFonts } from "./fonts";
 import { getSlides, renderSlide } from "./slides";
 
 export const PUBLIC_SCENES: Record<string, { title: string; copyName: string }> = IS_ONLINE
@@ -125,8 +126,9 @@ const Viewer = ({ name, owner, present: startPresenting, slide: startSlide }: Sh
       ? readSharedScene(owner, name).then((found) => found ?? Promise.reject(Object.assign(new Error(""), { missing: true })))
       : fetchScene(name).then((json) => ({ json, public: true, canEdit: false }));
     load
-      .then(({ json, public: isPublic, canEdit }) => {
+      .then(async ({ json, public: isPublic, canEdit }) => {
         const data = JSON.parse(json);
+        await registerSceneFonts(data);
         const elements = restoreElements(data.elements, null).filter((el) => !el.isDeleted);
         // backup slides ("skip when presenting") stay out of a shared deck
         const slides = getSlides(elements).filter((frame: any) => !frame.customData?.slides?.skip);
