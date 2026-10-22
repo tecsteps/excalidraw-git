@@ -18,7 +18,7 @@ import {
 } from "@excalidraw/common";
 import { measureText, refreshTextDimensions, syncInvalidIndices, wrapText } from "@excalidraw/element";
 
-import { BASE_URL, TAB_ID, scenesApi } from "./api";
+import { BASE_URL, IS_ONLINE, TAB_ID, scenesApi } from "./api";
 import { scenesController } from "./controller";
 import {
   editLocalScene,
@@ -37,6 +37,10 @@ import { applyMarkdown } from "./richText/agent";
 import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
+import { createReceiver, sendMessage } from "./online/frames";
+import { connection } from "./online/github";
+import { pairing } from "./online/pairing";
+import { serveRequest } from "./online/tabServer";
 
 import type { EditCommand, LocalSceneCommand, ReadCommand, SceneEditCommand } from "./cowork";
 
@@ -84,7 +88,9 @@ type Command =
     }
   | (RenderCommand & { conflict?: { name: string; side: "mine" | "theirs" } })
   | ReadCommand
-  | EditCommand;
+  | EditCommand
+  /** online: a request of the remote MCP to "the scenes server" (served by this tab) */
+  | { type: "http"; request: import("./online/tabServer").TabRequest };
 
 /** hidden headless tab started by the scenes server, only renders/converts */
 export const IS_RENDERER = new URLSearchParams(window.location.search).has(
@@ -437,7 +443,13 @@ const status = () => {
     current,
     dirty,
     autoSync,
-    github: sync.githubOnline === false ? "offline" : sync.githubOnline ? "online" : "unknown",
+    github: sync.notConnected
+      ? "not connected (all scenes stay in the user's browser, local-only)"
+      : sync.githubOnline === false
+      ? "offline"
+      : sync.githubOnline
+      ? "online"
+      : "unknown",
     lastCheckedAt: sync.lastCheckedAt,
     // "name: status" — synced / ahead (not pushed) / behind / diverged / conflict / local
     scenes: list
@@ -472,8 +484,14 @@ const runCommand = async (command: Command) => {
     case "scene-edit": {
       const run = agentEdits.then(() => editSceneOnGitHub(command, convertMcpElements));
       agentEdits = run.catch(() => {});
+      if (IS_ONLINE) {
+        // committed from this tab: no server announces it, sync right away
+        run.then(() => scenesController.syncNow({ refresh: true })).catch(() => {});
+      }
       return run;
     }
+    case "http":
+      return serveRequest(command.request);
     case "status":
       return status();
     case "local-read":
@@ -586,14 +604,117 @@ let source: EventSource | null = null;
 let unsubscribe: (() => void) | null = null;
 let focusedAt = document.hasFocus() ? Date.now() : 0;
 
-const report = () => {
+const tabState = () => {
   const { current, dirty } = scenesController.getState();
-  scenesApi.reportState({
+  return {
     current,
     dirty,
     visible: document.visibilityState === "visible",
     focusedAt,
-  });
+    ...(IS_ONLINE ? { github: connection.isActive() } : {}),
+  };
+};
+
+const report = () => {
+  if (IS_ONLINE) {
+    if (socket?.readyState === WebSocket.OPEN) {
+      sendMessage(socket, { type: "state", state: tabState() });
+    }
+    return;
+  }
+  scenesApi.reportState(tabState());
+};
+
+const handleCommand = async (event: { id: string; command: Command }, reply: (payload: { ok: boolean; result?: unknown; error?: string }) => void) => {
+  try {
+    await scenesController.ready;
+    const result = await (EXCLUSIVE.has(event.command.type) ? exclusive(() => runCommand(event.command)) : runCommand(event.command));
+    reply({ ok: true, result });
+  } catch (error: any) {
+    reply({ ok: false, error: error.message });
+  }
+};
+
+// -----------------------------------------------------------------------------
+// online (Kurviq): one WebSocket per tab to this browser's pairing — the
+// remote MCP's commands arrive here, results go back the same way
+// -----------------------------------------------------------------------------
+
+let socket: WebSocket | null = null;
+let socketRetry = 0;
+let socketTimer: number | null = null;
+let socketWanted = false;
+let socketKey: string | null = null;
+
+const openSocket = () => {
+  socketTimer = null;
+  const url = pairing.liveUrl(TAB_ID);
+  if (!socketWanted || !url) {
+    return;
+  }
+  socketKey = pairing.getKey();
+  const ws = new WebSocket(url);
+  socket = ws;
+  const receive = createReceiver();
+  let ping: number | null = null;
+  ws.onopen = () => {
+    socketRetry = 0;
+    sendMessage(ws, { type: "state", state: tabState() });
+    ping = window.setInterval(() => ws.readyState === WebSocket.OPEN && ws.send("ping"), 30_000);
+  };
+  ws.onmessage = (message) => {
+    if (message.data === "pong") {
+      return;
+    }
+    const event = receive(String(message.data));
+    if (!event) {
+      return;
+    }
+    if (event.type === "command") {
+      handleCommand(event, (payload) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          sendMessage(ws, { type: "result", id: event.id, ...payload });
+        }
+      });
+    } else if (event.type === "scene-saved" || event.type === "scene-renamed" || event.type === "scene-deleted") {
+      scenesController.syncNow();
+    }
+  };
+  ws.onclose = () => {
+    if (ping) {
+      clearInterval(ping);
+    }
+    if (socket === ws) {
+      socket = null;
+      scheduleSocket();
+    }
+  };
+};
+
+const scheduleSocket = () => {
+  if (!socketWanted || socketTimer !== null || !pairing.getKey()) {
+    return;
+  }
+  const delay = Math.min(30_000, 1000 * 2 ** socketRetry++);
+  socketTimer = window.setTimeout(openSocket, delay);
+};
+
+/** (re)connect when the pairing key appears, changes or is removed */
+const followPairing = () => {
+  if (pairing.getKey() === socketKey && socket) {
+    return;
+  }
+  const old = socket;
+  socket = null;
+  old?.close();
+  socketRetry = 0;
+  if (socketTimer !== null) {
+    clearTimeout(socketTimer);
+    socketTimer = null;
+  }
+  if (pairing.getKey()) {
+    openSocket();
+  }
 };
 
 const onFocus = () => {
@@ -602,6 +723,27 @@ const onFocus = () => {
 };
 
 export const connectLive = () => {
+  if (IS_ONLINE) {
+    if (socketWanted) {
+      return;
+    }
+    socketWanted = true;
+    pairing.subscribe(followPairing);
+    connection.subscribe(report);
+    followPairing();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", report);
+    let lastKey = "";
+    unsubscribe = scenesController.subscribe(() => {
+      const { current, dirty } = scenesController.getState();
+      const key = JSON.stringify([current, dirty]);
+      if (key !== lastKey) {
+        lastKey = key;
+        report();
+      }
+    });
+    return;
+  }
   if (source) {
     return;
   }
@@ -614,13 +756,7 @@ export const connectLive = () => {
   source.onmessage = async (message) => {
     const event = JSON.parse(message.data);
     if (event.type === "command") {
-      try {
-        await scenesController.ready;
-        const result = await (EXCLUSIVE.has(event.command.type) ? exclusive(() => runCommand(event.command)) : runCommand(event.command));
-        scenesApi.sendResult(event.id, { ok: true, result });
-      } catch (error: any) {
-        scenesApi.sendResult(event.id, { ok: false, error: error.message });
-      }
+      handleCommand(event, (payload) => scenesApi.sendResult(event.id, payload));
     } else if (["scene-saved", "scene-renamed", "scene-deleted"].includes(event.type)) {
       if (IS_RENDERER || event.source === `app:${TAB_ID}`) {
         return;

@@ -1,11 +1,11 @@
 ---
 name: excalidraw-scenes
-description: Draw, co-edit, look at and save diagrams in the user's local Excalidraw (git-backed scenes, MCP server "excalidraw"). Use whenever the user asks to draw or change a diagram/sketch/scene in Excalidraw, wants to co-work on a drawing, asks what is on their canvas, or mentions Excalidraw scenes.
+description: Draw, co-edit, look at and save diagrams in the user's local Kurviq / Excalidraw (git-backed scenes, MCP server "excalidraw"). Use whenever the user asks to draw or change a diagram/sketch/scene in Excalidraw, wants to co-work on a drawing, asks what is on their canvas, or mentions Excalidraw scenes.
 ---
 
-# Excalidraw scenes: how to work with the user's drawings
+# Kurviq (local): how to work with the user's drawings
 
-The user runs a local Excalidraw app (http://draw.test) with **scenes**
+The user runs Kurviq, a local Excalidraw app (http://draw.test), with **scenes**
 (named drawings, URL `http://draw.test/<scene>`) synced to a GitHub repo.
 The MCP server `excalidraw` gives you tools for it. The user is often
 **looking at the app while you work** and edits by hand in between.
@@ -270,6 +270,6 @@ push now.
 ## Troubleshooting
 
 - "Scenes server not reachable": the user runs `npm start` in the project
-  folder (excalidraw-git).
+  folder (kurviq).
 - "No Chrome found": your headless Excalidraw needs Chrome or another
   Chromium browser (`CHROME_PATH` in `.env`).

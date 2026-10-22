@@ -91,6 +91,8 @@ export type SyncInfo = {
   lastCheckedAt: string | null;
   lastError: string | null;
   running: boolean;
+  /** online (Kurviq): GitHub not connected or no repo chosen — everything stays in this browser */
+  notConnected: boolean;
 };
 
 export type ScenesState = {
@@ -183,6 +185,7 @@ class ScenesController {
       lastCheckedAt: null,
       lastError: null,
       running: false,
+      notConnected: false,
     },
     activity: [],
     conflict: null,
@@ -590,6 +593,37 @@ class ScenesController {
     if (on) {
       this.syncNow({ refresh: true });
     }
+  };
+
+  /**
+   * Online: another repo (or account) was connected. What this browser knew
+   * about GitHub belonged to the old repo: every scene with content counts as
+   * changed here, so it is pushed to (or merged with) the new repo — nothing
+   * local is lost or overwritten.
+   */
+  resetGitHubState = async () => {
+    await this.ready;
+    for (const [name, meta] of Object.entries(this.meta.scenes)) {
+      if (name === UNTITLED) {
+        continue;
+      }
+      meta.baseSha = null;
+      delete meta.remoteSha;
+      delete meta.conflict;
+      delete meta.renamedFrom;
+      if (name !== this.meta.current) {
+        const json = await this.localJson(name);
+        meta.dirty = !!json && !isEmptyJson(json);
+      }
+    }
+    this.meta.pendingDeletes = {};
+    this.meta.baseline = null;
+    this.persistMeta();
+    this.setState({ remote: null, conflict: null });
+    this.recomputeDirty();
+    this.refresh();
+    this.log("info", "Connected another GitHub repo — your scenes sync with it now");
+    this.syncNow({ refresh: true });
   };
 
   /** per-scene override; undefined = follow the global switch */
@@ -1062,6 +1096,12 @@ class ScenesController {
       try {
         listing = await scenesApi.list(refresh);
       } catch (error: any) {
+        if (error.notConnected) {
+          this.setState({
+            sync: { ...this.state.sync, serverReachable: true, githubOnline: false, notConnected: true, lastError: null },
+          });
+          return;
+        }
         if (this.state.sync.serverReachable !== false) {
           this.log("error", "Scenes server not reachable — working locally");
         }
@@ -1076,6 +1116,7 @@ class ScenesController {
         sync: {
           ...this.state.sync,
           serverReachable: true,
+          notConnected: false,
           githubOnline: listing.remote.online,
           lastCheckedAt: listing.remote.lastFetchAt,
           lastError: listing.remote.lastError,
@@ -1240,6 +1281,13 @@ class ScenesController {
         this.updateRemoteSha(name, apiError.remoteSha ?? null);
         this.log("info", `"${name}" changed on GitHub meanwhile — merging`);
         await this.mergeScene(name, { pushAfter: true });
+        return null;
+      }
+      if (apiError.notConnected) {
+        this.setState({ sync: { ...this.state.sync, githubOnline: false, notConnected: true } });
+        if (manual) {
+          throw new Error("Saved in this browser — connect GitHub to sync it");
+        }
         return null;
       }
       if (apiError.offline) {

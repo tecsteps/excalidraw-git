@@ -1,0 +1,35 @@
+// Kurviq on Cloudflare: one Worker serves the app (static assets), Connect
+// GitHub (/auth), agent pairings (Durable Object) and the remote MCP.
+// Deploy: `npm run deploy:online` in the project root. Secrets (set once,
+// see README): GITHUB_CLIENT_SECRET, COOKIE_KEY.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kurviq",
+  "main": "build/worker.js",
+  "no_bundle": true,
+  "compatibility_date": "2025-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/app",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // the Worker sees every request: it serves its own routes and redirects
+    // www to kurviq.com (one origin = one browser storage); the rest are assets
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "PAIRING", "class_name": "Pairing" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Pairing"] }],
+  "vars": {
+    "CANONICAL_HOST": "kurviq.com",
+    "GITHUB_APP_SLUG": "kurviq",
+    "GITHUB_CLIENT_ID": "Iv23lipNDWTi1X98E29f"
+  },
+  "routes": [
+    { "pattern": "kurviq.com", "custom_domain": true },
+    { "pattern": "www.kurviq.com", "custom_domain": true }
+  ],
+  // no request logs (see /privacy); `wrangler tail` still works live when debugging
+  "observability": { "enabled": false }
+}

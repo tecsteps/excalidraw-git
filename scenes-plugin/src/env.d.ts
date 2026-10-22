@@ -4,4 +4,6 @@ interface ImportMetaEnv {
   /** injected from SCENES_GIT_REPO / SCENES_GIT_BRANCH */
   VITE_APP_SCENES_GIT_REPO: string;
   VITE_APP_SCENES_GIT_BRANCH: string;
+  /** "local" (scenes server on this machine) or "online" (Kurviq, GitHub API in the browser) */
+  VITE_APP_SCENES_TARGET: string;
 }

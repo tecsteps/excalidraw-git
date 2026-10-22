@@ -1,0 +1,49 @@
+# Kurviq
+
+> Kurviq (https://kurviq.com) is a free online whiteboard built on Excalidraw (unofficial), with named scenes, slides and formatted text. No account: drawings live in the user's browser and can optionally be synced with a GitHub repository. AI agents draw and edit with the user through a remote MCP server that works via the user's open Kurviq tab.
+
+## Connect an agent (MCP)
+
+1. The user opens https://kurviq.com and clicks **MCP** (top left). Kurviq shows a personal link: `https://kurviq.com/mcp/<key>` (the key is made by that browser and belongs to it).
+2. Add it as a remote MCP server (Streamable HTTP, no authentication; the key in the URL is the credential):
+   - Claude Code: `claude mcp add --transport http kurviq https://kurviq.com/mcp/<key>`
+   - Codex (`~/.codex/config.toml`): `[mcp_servers.kurviq]` with `url = "https://kurviq.com/mcp/<key>"`
+   - Claude Desktop / claude.ai: Settings → Connectors → Add custom connector → the URL
+   - Cursor and others: `{"mcpServers": {"kurviq": {"url": "https://kurviq.com/mcp/<key>"}}}`
+3. The tools work while Kurviq is open in that browser (any scene, any tab). If a tool answers "Kurviq is not open", ask the user to open https://kurviq.com and try again.
+
+The link gives access to the user's Kurviq while it is open: treat it like a password. The user can replace it (MCP → "Make a new link") or turn agent access off.
+
+## How to work with the user's drawings
+
+The MCP server's instructions (sent on connect) explain everything in detail. In short:
+
+- Call `read_me` once: the element format (shapes, labels, arrows with bindings, images, formatted text, slides).
+- New drawing: `create_view` (draft, the user may see it live in their client) → `save_scene(name, checkpointId)`.
+- Change an existing scene: always `read_scene(name)` first, then `edit_scene(name, basedOn: revision, add / update / delete)`. Edit only the elements you mean; never re-create a scene the user works on. `edit_scene` returns an image of the result.
+- `read_scene(name, since: revision)` reports exactly what the user changed by hand since your last edit (`userChanges`).
+- `view_scene` returns a real PNG (rendered in the user's tab with Excalidraw itself). `measure_text` measures text with the real fonts.
+- Slides: every frame is a slide; a "Template" frame holds header/footer/logo. `validate_deck` checks a deck (text that doesn't fit, cut-off elements, contrast, …).
+- Formatted text: write markdown in `text` (bold, italic, lists, checklists, links, sizes).
+- Images and icons: `{ "type": "image", "src": "<http(s) or data URL>" }`, `"svg": "<svg…>"` or `"icon": "lucide:database"`.
+- `app_status`: which scene the user has open, whether GitHub is connected (`github`), each scene's sync status. `open_scene` switches what the user sees: only when they ask.
+- Don't push, write files or call HTTP APIs yourself: the tools and the user's app do all syncing and merging.
+
+## GitHub (optional, per browser)
+
+- Without GitHub every scene is local-only: it exists only in that browser. Agents read and edit local-only scenes the same way.
+- With GitHub (Scenes sidebar → Connect GitHub → install the Kurviq GitHub App on a repository → pick it → Activate sync), scenes are stored as `scenes/<name>.excalidraw` in that repository. Edits are pushed about 10 s after the user stops drawing; other people's changes arrive within a minute and are merged element by element. Agent edits are commits by the user's GitHub account, marked with a `Scenes-Source: agent` trailer.
+- Several people (and their agents) can use the same repository: each connects their own GitHub account in their own browser and picks the same repository.
+- The connection stays for months: Kurviq keeps a refresh token in an encrypted, httpOnly cookie of the browser (nothing is stored on Kurviq's server). Disconnect any time in the Scenes sidebar.
+
+## Limits of the online version
+
+- Local file paths (image `src`, edit files) don't work: Kurviq's MCP server runs on kurviq.com, not on the agent's machine. Pass content inline (URLs, data URLs, JSON).
+- `export_pdf` is not available through MCP; the user exports PDFs in Kurviq (Slides sidebar → PDF).
+- Want everything on your own machine (local Excalidraw, git CLI, headless rendering without an open tab)? Use the local install: https://github.com/tecsteps/kurviq
+
+## Links
+
+- App: https://kurviq.com
+- Source and local install: https://github.com/tecsteps/kurviq
+- Excalidraw: https://github.com/excalidraw/excalidraw

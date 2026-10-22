@@ -13,13 +13,15 @@ import {
 import { useEffect, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 
-import { SCENE_NAME_RE } from "./api";
+import { IS_ONLINE, SCENE_NAME_RE } from "./api";
 import { IDLE_PUSH_MS, scenesController } from "./controller";
 import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
 import { PresentationOverlay } from "./present";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
+import { connection } from "./online/github";
+import { ConnectGitHubOffer, GitHubPanel, KurviqFooter, McpButton, startOnline } from "./online/ui";
 
 import type { Activity, SceneListItem, ScenesState, SyncStatus } from "./controller";
 
@@ -94,6 +96,9 @@ const useAttachController = () => {
       scenesController.attach(api);
       connectLive();
       if (!IS_RENDERER) {
+        if (IS_ONLINE) {
+          startOnline();
+        }
         deck.attach(api);
         connectRouter();
         scenesController.startSync();
@@ -130,7 +135,7 @@ const STATUS: Record<SyncStatus, { icon: string; label: string; tone: string }> 
 };
 
 const isOffline = (state: ScenesState) =>
-  state.sync.serverReachable === false || state.sync.githubOnline === false;
+  !state.sync.notConnected && (state.sync.serverReachable === false || state.sync.githubOnline === false);
 
 const StatusBadge = ({ status, compact }: { status: SyncStatus; compact?: boolean }) => {
   const info = STATUS[status];
@@ -171,7 +176,7 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
         ) : busy === "saving" || state.sync.running ? (
           <span className="scenes-pill__status">syncing…</span>
         ) : (
-          status !== "synced" && <StatusBadge status={status} compact />
+          status !== "synced" && !(state.sync.notConnected && status === "local-only") && <StatusBadge status={status} compact />
         )}
         {offline && <span className="scenes-pill__offline" title="Offline — working locally">offline</span>}
         <span className="scenes-pill__caret" aria-hidden>▾</span>
@@ -190,6 +195,7 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
           Slides
         </button>
       )}
+      {IS_ONLINE && !isMobile && <McpButton />}
       {open && (
         <SceneSwitcher
           onClose={() => setOpen(false)}
@@ -330,6 +336,7 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
       <button type="button" className="scenes-switcher__manage" onClick={onManage}>
         Manage scenes…
       </button>
+      {IS_ONLINE && <ConnectGitHubOffer />}
     </div>
   );
 };
@@ -387,7 +394,7 @@ const SyncBar = ({ state, now }: { state: ScenesState; now: number }) => {
   let text: string;
   if (sync.serverReachable === false) {
     tone = "danger";
-    text = "Scenes server not running — working locally";
+    text = IS_ONLINE ? "Kurviq server not reachable — working locally" : "Scenes server not running — working locally";
   } else if (sync.githubOnline === false) {
     tone = "danger";
     text = "GitHub not reachable — working locally";
@@ -835,6 +842,9 @@ export const ScenesSidebar = () => {
   // rename / duplicate of the open scene happen in the card, others in the list
   const currentPrompt =
     prompt && (!("scene" in prompt) || prompt.scene === current) ? prompt : null;
+  // online without GitHub: everything stays in this browser, nothing to publish
+  useSyncExternalStore(connection.subscribe, connection.getState);
+  const withGitHub = !IS_ONLINE || connection.isActive();
 
   const submitName = async (name: string, { localOnly = false }: { localOnly?: boolean } = {}) => {
     if (!prompt) {
@@ -861,13 +871,14 @@ export const ScenesSidebar = () => {
         <div className="scenes-sidebar__title">Scenes</div>
       </Sidebar.Header>
       <div className="scenes-sidebar__body">
-        <SyncBar state={state} now={now} />
+        {IS_ONLINE && <GitHubPanel />}
+        {withGitHub && <SyncBar state={state} now={now} />}
 
         <section className="scenes-current">
           <div className="scenes-current__label">Current scene</div>
           <div className="scenes-current__name">
             {current ?? <em>{UNTITLED_LABEL}</em>}
-            {current !== null && <StatusBadge status={status} />}
+            {current !== null && (withGitHub || status !== "local-only") && <StatusBadge status={status} />}
           </div>
           <div className="scenes-current__status">
             {busy === "saving"
@@ -876,6 +887,8 @@ export const ScenesSidebar = () => {
               ? "Loading…"
               : currentItem?.pendingRename
               ? `Renamed here — on GitHub it is still “${currentItem.pendingRename}”, renamed there once reachable`
+              : !withGitHub && current !== null
+              ? "Saved in this browser"
               : currentStatusText(status, { autoSync: sceneAutoSync, offline: isOffline(state), empty })}
           </div>
 
@@ -897,6 +910,7 @@ export const ScenesSidebar = () => {
             />
           ) : (
             <div className="scenes-row">
+              {(withGitHub || current === null) && (
               <button
                 type="button"
                 className="scenes-btn scenes-btn--primary"
@@ -916,6 +930,7 @@ export const ScenesSidebar = () => {
               >
                 {save} {status === "local-only" ? "Publish" : "Save"}
               </button>
+              )}
               {current !== null && (
                 <button type="button" className="scenes-btn" disabled={isBusy} onClick={() => setPrompt({ mode: "saveAs" })}>
                   Save as…
@@ -1008,7 +1023,7 @@ export const ScenesSidebar = () => {
 
         <ActivityLog activity={activity} now={now} hidden={hiddenNames} />
 
-        <RepoLink />
+        {IS_ONLINE ? <KurviqFooter /> : <RepoLink />}
       </div>
     </Sidebar>
     <SlidesSidebar />

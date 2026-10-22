@@ -1,4 +1,4 @@
-# Using Excalidraw scenes with a coding agent
+# Using Kurviq with a coding agent
 
 Coding agents (Claude Code, Codex, Cursor, …) can draw diagrams, save them as
 scenes to the GitHub repo, and co-edit scenes with you, all through one MCP
@@ -6,6 +6,12 @@ server: `scenes-mcp/server.mjs`. The agent has its **own hidden Excalidraw**
 (headless Chrome) and never works in your browser; your app only syncs. To
 install everything with an agent, use the prompt in
 [README.md](README.md#install-with-an-agent).
+
+**Kurviq (online, https://kurviq.com):** no install. The user clicks **MCP**
+in Kurviq and gives you a personal link `https://kurviq.com/mcp/<key>`
+(remote MCP, Streamable HTTP). You then work through the user's open Kurviq
+tab with the same tools as below. Read https://kurviq.com/llms.txt
+([online/llms.txt](online/llms.txt)).
 
 ```
 agent ──MCP──> scenes-mcp ──HTTP──> scenes-server ──git──> GitHub (excalidrawscenes)
@@ -17,7 +23,7 @@ agent ──MCP──> scenes-mcp ──HTTP──> scenes-server ──git─�
 ## 1. Start the app
 
 ```bash
-cd /path/to/excalidraw-git
+cd /path/to/kurviq
 npm start            # scenes server on :3101 + app on http://draw.test
 ```
 
@@ -29,7 +35,7 @@ server starts on demand. It needs Chrome or another Chromium browser
 ## 2. Connect your agent
 
 The server is a stdio MCP server and works from any directory. Use the absolute
-path: `/path/to/excalidraw-git/scenes-mcp/server.mjs`.
+path: `/path/to/kurviq/scenes-mcp/server.mjs`.
 
 **Claude Code, in this folder:** nothing to do. `.mcp.json` registers it as
 `excalidraw`. Approve it when Claude Code asks the first time.
@@ -37,7 +43,7 @@ path: `/path/to/excalidraw-git/scenes-mcp/server.mjs`.
 **Claude Code, in every project:**
 
 ```bash
-claude mcp add excalidraw --scope user -- node /path/to/excalidraw-git/scenes-mcp/server.mjs
+claude mcp add excalidraw --scope user -- node /path/to/kurviq/scenes-mcp/server.mjs
 ```
 
 **Codex** (`~/.codex/config.toml`):
@@ -45,7 +51,7 @@ claude mcp add excalidraw --scope user -- node /path/to/excalidraw-git/scenes-mc
 ```toml
 [mcp_servers.excalidraw]
 command = "node"
-args = ["/path/to/excalidraw-git/scenes-mcp/server.mjs"]
+args = ["/path/to/kurviq/scenes-mcp/server.mjs"]
 ```
 
 **Cursor, Claude Desktop and other clients:** add this to their MCP JSON config:
@@ -55,7 +61,7 @@ args = ["/path/to/excalidraw-git/scenes-mcp/server.mjs"]
   "mcpServers": {
     "excalidraw": {
       "command": "node",
-      "args": ["/path/to/excalidraw-git/scenes-mcp/server.mjs"]
+      "args": ["/path/to/kurviq/scenes-mcp/server.mjs"]
     }
   }
 }
@@ -65,7 +71,7 @@ args = ["/path/to/excalidraw-git/scenes-mcp/server.mjs"]
 
 ```bash
 claude -p "Draw our login flow and save it as scene 'Login Flow'" \
-  --mcp-config /path/to/excalidraw-git/.mcp.json \
+  --mcp-config /path/to/kurviq/.mcp.json \
   --allowedTools "mcp__excalidraw__*"
 ```
 

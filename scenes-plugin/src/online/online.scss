@@ -1,0 +1,223 @@
+// Kurviq's own UI (online build): GitHub panel, MCP dialog, footer
+.excalidraw {
+  .kq-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--default-border-color);
+    border-radius: var(--border-radius-lg);
+    background: var(--island-bg-color);
+    font-size: 0.8rem;
+    color: var(--text-primary-color);
+
+    &--repo {
+      padding: 0.25rem 0.25rem 0.5rem;
+      gap: 0.25rem;
+    }
+  }
+
+  .kq-card__title {
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+
+  .kq-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .kq-muted {
+    color: var(--color-gray-50);
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .kq-small {
+    font-size: 0.7rem;
+  }
+
+  .kq-left {
+    align-self: flex-start;
+    text-align: left;
+  }
+
+  .kq-notice {
+    padding: 0.4rem 0.5rem;
+    border-radius: var(--border-radius-md);
+    background: var(--color-surface-high);
+    font-size: 0.75rem;
+  }
+
+  .kq-icon svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .kq-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+
+    select {
+      height: 2rem;
+      padding: 0 0.4rem;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--border-radius-md);
+      background: var(--input-bg-color, var(--island-bg-color));
+      color: var(--text-primary-color);
+      font-family: inherit;
+    }
+  }
+
+  .kq-check {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    font-size: 0.75rem;
+  }
+
+  .kq-repo-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0 0.5rem;
+  }
+
+  .kq-dot {
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--color-primary);
+  }
+
+  .kq-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.35);
+    pointer-events: all;
+  }
+
+  .kq-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: min(36rem, 100%);
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+    padding: 1.25rem;
+    border-radius: var(--border-radius-lg);
+    background: var(--island-bg-color);
+    box-shadow: var(--shadow-island);
+    color: var(--text-primary-color);
+    font-size: 0.85rem;
+
+    h2 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+
+    p {
+      margin: 0;
+    }
+  }
+
+  .kq-dialog__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .kq-close {
+    border: none;
+    background: none;
+    color: var(--color-gray-50);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .kq-prompt {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.6rem;
+    border: 1px solid var(--default-border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--color-surface-low, var(--island-bg-color));
+    color: var(--text-primary-color);
+    font-family: var(--font-family-code, monospace);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    resize: vertical;
+  }
+
+  .kq-footer {
+    margin-top: auto;
+    padding: 0.5rem 0.25rem 0;
+    font-size: 0.68rem;
+    color: var(--color-gray-50);
+
+    a {
+      color: inherit;
+    }
+  }
+}
+
+.excalidraw .kq-welcome-logo {
+  font-family: "Excalifont", "Virgil", sans-serif;
+  font-size: 3rem;
+  color: var(--color-primary);
+  letter-spacing: 0.02em;
+}
+
+.excalidraw .kq-switcher-github {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.6rem 0.3rem;
+  border-top: 1px solid var(--default-border-color);
+
+  .scenes-btn {
+    justify-content: center;
+  }
+}
+
+.excalidraw .kq-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 30rem;
+
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: var(--color-primary);
+    pointer-events: var(--ui-pointerEvents, all);
+  }
+
+  .kq-welcome__storage {
+    font-size: 0.95em;
+  }
+
+  .kq-welcome__signature {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    text-decoration: none;
+
+    svg {
+      color: #0a66c2;
+    }
+  }
+}

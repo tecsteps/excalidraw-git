@@ -1,6 +1,9 @@
-# excalidraw-git: git-backed Excalidraw scenes for humans and agents
+# Kurviq: git-backed Excalidraw scenes for humans and agents
 
-_Unofficial add-on, not affiliated with Excalidraw._
+_Built on [Excalidraw](https://github.com/excalidraw/excalidraw). Unofficial, not affiliated with Excalidraw._
+
+**Online, no install: <https://kurviq.com>** (see [Kurviq: the online version](#kurviq-the-online-version)).
+This repo is its source, and also runs locally:
 
 Local Excalidraw with **multiple scenes** that are saved to a GitHub repo
 (`SCENES_GIT_REPO`, default <https://github.com/tecsteps/excalidrawscenes>),
@@ -15,7 +18,74 @@ clones it at the tested commits pinned in `scripts/setup.mjs`.
 | `excalidraw-mcp/` | upstream clone of excalidraw/excalidraw-mcp, **not modified** |
 | `scenes-plugin/` | the UI/logic, injected into `excalidraw-app` at build time by `scenes-plugin/vite.config.mts` (uses public `<Excalidraw/>` extension points only: `renderTopLeftUI` + a custom `<Sidebar/>`) |
 | `scenes-server/` | tiny local Node server: commits & pushes `scenes/<name>.excalidraw` to the scenes repo with your local git credentials (via a transport clone in `scenes-server/.repo`); relays agent commands to the open app. **Stateless**, see below |
-| `scenes-mcp/` | MCP server = excalidraw-mcp's tools + scene tools |
+| `scenes-mcp/` | MCP server = excalidraw-mcp's tools + scene tools (`tools.mjs`; `server.mjs` = local stdio server) |
+| `online/` | **Kurviq**, the online version at <https://kurviq.com>: Cloudflare Worker (GitHub sign-in, agent pairing, remote MCP), `llms.txt`, deploy config |
+
+## Kurviq: the online version
+
+<https://kurviq.com> is the same app as a website. No account, nothing to
+install:
+
+- **Without GitHub** your scenes are saved in your browser (localStorage and
+  IndexedDB; Kurviq asks the browser to keep them permanently). Everything
+  works: scenes, slides, formatted text, PDF export (via the browser's print
+  dialog).
+- **Connect GitHub** (optional) to sync your scenes with a repository, on all
+  your devices and with other people:
+  1. Open the **Scenes** sidebar (click the scene name, top left) and click
+     **Connect GitHub**. Sign in to GitHub and allow Kurviq.
+  2. If Kurviq can't see a repository yet, click **Choose repositories on
+     GitHub** and install the Kurviq GitHub App on the repository your scenes
+     should go to (create an empty one first if you like; private is fine).
+     Kurviq gets access to the files of exactly these repositories, nothing
+     else.
+  3. Pick the repository and click **Activate sync** (tick "Also sync my
+     existing scenes" to bring along what you drew before).
+
+  Scenes are stored as `scenes/<name>.excalidraw`, pushed about 10 s after
+  you stop drawing; changes by others arrive within a minute and are merged
+  element by element (see [Sync with GitHub](#sync-with-github)). The
+  connection stays for months: Kurviq keeps GitHub's refresh token in an
+  encrypted, httpOnly cookie of your browser; its server stores nothing.
+  **Disconnect** or **Change repository** any time in the sidebar.
+- **Several people, one repository:** everyone opens kurviq.com in their own
+  browser, connects their own GitHub account and picks the same repository
+  (the repository owner installs the Kurviq app on it once, and gives the
+  others write access as usual on GitHub). Commits are made by each person's
+  own account. A local install (`npm start`) can use the same repository.
+- **AI agents (MCP):** click **MCP** (top left). Kurviq shows a prompt with a
+  personal link `https://kurviq.com/mcp/<key>`; give it to your agent (Claude
+  Code, Codex, Cursor, Claude, …). The agent then works through your open
+  Kurviq tab: it reads, draws and edits your scenes (with or without GitHub),
+  and its edits are merged with yours. The tab must be open while the agent
+  works. Treat the link like a password; **Make a new link** replaces it.
+  Agents find everything they need at <https://kurviq.com/llms.txt>.
+
+Differences to the local install: Excalidraw's live collaboration and
+shareable links (excalidraw.com servers) are switched off, agents need your
+open tab (no headless Chrome), local file paths can't be used by agents, and
+PDFs are made with the browser's print dialog. Kurviq is operated by
+Tecsteps GmbH: [imprint](https://kurviq.com/imprint),
+[privacy](https://kurviq.com/privacy) (no accounts, no tracking, no request
+logs; the pages are in `online/pages/`).
+
+### Running Kurviq yourself (Cloudflare)
+
+`npm run build:online` builds the app into `online/dist/app`; `online/` holds
+the Worker (`worker/`), `wrangler.jsonc` and `llms.txt`.
+
+- Local test: put `KURVIQ_GITHUB_CLIENT_ID`, `KURVIQ_GITHUB_CLIENT_SECRET` and
+  `KURVIQ_GITHUB_APP_SLUG` into `.env`, then `npm run dev:online`
+  (http://localhost:8787).
+- GitHub App: callback URLs `https://<your domain>/auth/callback` (and
+  `http://localhost:8787/auth/callback`), "Request user authorization
+  (OAuth) during installation" on, user token expiry on, webhook off,
+  repository permission Contents: read and write. No private key needed.
+- Deploy: `cd online && npm install`, set the secrets once with
+  `npx wrangler secret put GITHUB_CLIENT_SECRET` and
+  `npx wrangler secret put COOKIE_KEY` (value: `openssl rand -base64 32`),
+  adjust `vars` and `routes` in `wrangler.jsonc`, then `npm run deploy:online`
+  in the project root.
 
 ## Install with an agent
 
@@ -25,7 +95,7 @@ installs everything end to end and checks that it works. Replace
 leave it in and the agent will ask you.
 
 ````text
-Install excalidraw-git (https://github.com/tecsteps/excalidraw-git) on this
+Install Kurviq locally (https://github.com/tecsteps/kurviq) on this
 machine end to end, and verify that it works. Work step by step, run the
 commands yourself, and fix problems as you go. Ask me only when you need a
 decision or something only I can do (such as logging in).
@@ -44,8 +114,8 @@ push to; an empty repo is fine.)
      browser tab is open). If it is not in the default location, note its
      path for CHROME_PATH.
 
-2. Get the code. Unless I said otherwise, clone into ~/excalidraw-git:
-   git clone https://github.com/tecsteps/excalidraw-git.git ~/excalidraw-git
+2. Get the code. Unless I said otherwise, clone into ~/kurviq:
+   git clone https://github.com/tecsteps/kurviq.git ~/kurviq
    If the folder already exists, `git pull` instead.
 
 3. Configure. `cp .env.example .env` (keep an existing .env, only add missing
@@ -103,7 +173,7 @@ push to; an empty repo is fine.)
 ## Setup & run
 
 ```bash
-git clone https://github.com/tecsteps/excalidraw-git.git && cd excalidraw-git
+git clone https://github.com/tecsteps/kurviq.git && cd kurviq
 cp .env.example .env   # set SCENES_GIT_REPO to your scenes repo
 npm run setup     # clone (if missing) + install + build upstream repos, link node_modules
 npm start         # scenes server (:3101) + app (http://draw.test)
@@ -337,5 +407,14 @@ a clear `[excalidraw-scenes]` error; adjust `scenes-plugin/vite.config.mts`.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Excalidraw and excalidraw-mcp are separate
-projects under their own licenses.
+Kurviq is MIT licensed, see [LICENSE](LICENSE).
+
+Kurviq is built on [Excalidraw](https://github.com/excalidraw/excalidraw)
+(MIT, Copyright (c) 2020 Excalidraw) and uses
+[excalidraw-mcp](https://github.com/excalidraw/excalidraw-mcp) (MIT). It is
+an independent, unofficial project, not affiliated with or endorsed by
+Excalidraw. Their code is not part of this repository (`npm run setup`
+clones it unmodified), but builds include it together with their
+dependencies and fonts: see [NOTICE.md](NOTICE.md) and the generated
+notices at <https://kurviq.com/third-party-licenses.txt> and
+<https://kurviq.com/third-party-licenses-server.txt>.

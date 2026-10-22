@@ -1,4 +1,8 @@
-// Client for the local scenes git server (see ../../scenes-server).
+// Client for the scenes backend: the local scenes git server (see
+// ../../scenes-server), or — in the online build (Kurviq) — GitHub's API,
+// called from the browser (./online/github.ts).
+
+import { githubScenes } from "./online/github";
 
 export type RemoteScene = { name: string; sha: string; updatedAt: string | null };
 
@@ -8,6 +12,9 @@ export type RemoteInfo = {
   lastFetchAt: string | null;
   lastError: string | null;
 };
+
+/** Kurviq: the online build (GitHub API in the browser, no scenes server) */
+export const IS_ONLINE = import.meta.env.VITE_APP_SCENES_TARGET === "online";
 
 export const BASE_URL: string = (
   import.meta.env.VITE_APP_SCENES_SERVER_URL || "http://localhost:3101"
@@ -23,6 +30,8 @@ export type ApiError = Error & {
   remoteSha?: string | null;
   /** rename: the target name already exists */
   exists?: boolean;
+  /** online: GitHub is not connected (or no repo chosen) — work locally */
+  notConnected?: boolean;
 };
 
 const request = async (path: string, init?: RequestInit) => {
@@ -52,7 +61,7 @@ const request = async (path: string, init?: RequestInit) => {
 
 const scenePath = (name: string) => `/api/scenes/${encodeURIComponent(name)}`;
 
-export const scenesApi = {
+const localScenesApi = {
   list: async (
     refresh = false,
   ): Promise<{ scenes: RemoteScene[]; remote: RemoteInfo }> =>
@@ -132,5 +141,18 @@ export const scenesApi = {
       body: JSON.stringify(payload),
     }).catch(() => {}),
 };
+
+/** online: the same calls against GitHub; the live channel is a WebSocket (live.ts) */
+const onlineScenesApi: typeof localScenesApi = {
+  list: githubScenes.list,
+  load: githubScenes.load,
+  save: (name, json, baseSha, source = `app:${TAB_ID}`) => githubScenes.save(name, json, baseSha, source),
+  remove: githubScenes.remove,
+  rename: githubScenes.rename,
+  reportState: async () => {},
+  sendResult: async () => {},
+};
+
+export const scenesApi = IS_ONLINE ? onlineScenesApi : localScenesApi;
 
 export const SCENE_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.()-]{0,99}$/u;

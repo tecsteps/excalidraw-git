@@ -1,0 +1,16 @@
+{
+  "name": "kurviq-online",
+  "private": true,
+  "type": "module",
+  "description": "Kurviq: the online build (Cloudflare Worker + static app)",
+  "scripts": {
+    "build:worker": "node build-worker.mjs",
+    "dev": "node dev-vars.mjs && node build-worker.mjs && wrangler dev",
+    "deploy": "node build-worker.mjs && node with-env.mjs npx wrangler deploy",
+    "secrets": "node secrets.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "wrangler": "4.42.0"
+  }
+}

@@ -5,16 +5,21 @@
 // its env dir relative to cwd), e.g.:
 //   cd excalidraw/excalidraw-app && npx vite --config ../../scenes-plugin/vite.config.mts
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { VitePWA } from "vite-plugin-pwa";
+
 import upstreamConfig from "../excalidraw/excalidraw-app/vite.config.mts";
+
+import { thirdPartyNotices } from "../online/licenses.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE = path.resolve(HERE, "..");
 const EXCALIDRAW_ROOT = path.resolve(WORKSPACE, "excalidraw");
 const PLUGIN_ENTRY = path.resolve(HERE, "src/index.tsx");
+const ONLINE_DIR = path.resolve(WORKSPACE, "online");
 
 const readEnv = () => {
   const env: Record<string, string> = {};
@@ -339,17 +344,354 @@ const sceneUrls = () => ({
   },
 });
 
+/**
+ * Kurviq (SCENES_TARGET=online): the same app as a public website. Excalidraw
+ * services that would send drawings elsewhere are switched off (live
+ * collaboration, analytics), the page carries Kurviq's name and icon, and the
+ * service worker leaves the Worker's routes (/auth, /mcp, /live) alone.
+ */
+const SITE = "https://kurviq.com";
+const KURVIQ_TITLE = "Kurviq – free whiteboard with GitHub sync and AI agents";
+const KURVIQ_DESCRIPTION =
+  "Kurviq is a free online whiteboard built on Excalidraw: hand-drawn diagrams, scenes, slides and formatted text. No account – your drawings stay in your browser. Optionally sync them with a GitHub repository and let AI agents draw with you via MCP.";
+
+const KURVIQ_META = `<!-- Primary Meta Tags -->
+    <meta name="title" content="${KURVIQ_TITLE}" />
+    <meta name="description" content="${KURVIQ_DESCRIPTION}" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta name="application-name" content="Kurviq" />
+    <meta name="apple-mobile-web-app-title" content="Kurviq" />
+    <link rel="canonical" href="${SITE}/" />
+    <meta property="og:site_name" content="Kurviq" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:url" content="${SITE}/" />
+    <meta property="og:title" content="${KURVIQ_TITLE}" />
+    <meta property="og:description" content="${KURVIQ_DESCRIPTION}" />
+    <meta property="og:image" content="${SITE}/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Kurviq: hand-drawn diagrams and slides, synced with GitHub, AI agents draw with you" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${KURVIQ_TITLE}" />
+    <meta name="twitter:description" content="${KURVIQ_DESCRIPTION}" />
+    <meta name="twitter:image" content="${SITE}/og-image.png" />
+    <link rel="alternate" type="text/plain" title="Kurviq for AI agents" href="/llms.txt" />
+    <script type="application/ld+json">${JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      name: "Kurviq",
+      url: `${SITE}/`,
+      description: KURVIQ_DESCRIPTION,
+      applicationCategory: "DesignApplication",
+      operatingSystem: "Any (web browser)",
+      browserRequirements: "Requires JavaScript",
+      isAccessibleForFree: true,
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+      image: `${SITE}/og-image.png`,
+      featureList: [
+        "Hand-drawn diagrams and sketches (Excalidraw)",
+        "Named scenes with their own URLs",
+        "Slides and presentations with templates and PDF export",
+        "Formatted text: bold, lists, checklists, links",
+        "Optional sync with a GitHub repository, shared by several people",
+        "AI agents draw and edit with you (remote MCP server)",
+        "No account; works offline",
+      ],
+      sameAs: ["https://github.com/tecsteps/kurviq"],
+    })}</script>`;
+
+const KURVIQ_ICONS = `<link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/svg+xml" href="/kurviq.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />`;
+
+/**
+ * What search engines (and visitors without JavaScript) see; the app replaces
+ * it as soon as it starts.
+ */
+const KURVIQ_STATIC = `<div id="root"><main class="kq-static" style="max-width:40rem;margin:12vh auto;padding:0 1.5rem;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#555;line-height:1.55">
+      <h1 style="color:#1f1d3a;font-size:2rem;margin:0 0 .5rem">Kurviq: hand-drawn diagrams, synced with GitHub</h1>
+      <p>Kurviq is a free online whiteboard built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a>. Sketch diagrams with a hand-drawn look, organise them as named scenes, present them as slides and write formatted text. No account needed: your drawings stay in your browser.</p>
+      <h2 style="font-size:1.1rem;color:#1f1d3a">Sync with GitHub, together</h2>
+      <p>Connect GitHub to keep your scenes in a repository of your choice, on all your devices. Several people can work in the same repository; changes are merged element by element.</p>
+      <h2 style="font-size:1.1rem;color:#1f1d3a">AI agents draw with you</h2>
+      <p>Give Claude, Codex, Cursor or any MCP client your personal Kurviq link and it reads, draws and edits your scenes while you work. Agents: see <a href="/llms.txt">llms.txt</a>.</p>
+      <p><a href="https://github.com/tecsteps/kurviq">Open source (MIT)</a> · unofficial, not affiliated with Excalidraw · <a href="/third-party-licenses.txt">licenses</a> · <a href="/imprint">imprint</a> · <a href="/privacy">privacy</a></p>
+    </main></div>`;
+
+/** branded files written over upstream's (Excalidraw-branded) ones in the build */
+const KURVIQ_FILES: Record<string, string> = {
+  "favicon.ico": "favicon.ico",
+  "favicon-16x16.png": "icon-16.png",
+  "favicon-32x32.png": "icon-32.png",
+  "apple-touch-icon.png": "icon-180.png",
+  "android-chrome-192x192.png": "icon-192.png",
+  "android-chrome-512x512.png": "icon-512.png",
+  "maskable_icon_x192.png": "icon-maskable-512.png",
+  "maskable_icon_x512.png": "icon-maskable-512.png",
+  "og-image.png": "og-image.png",
+  "kurviq.svg": "kurviq.svg",
+};
+/**
+ * Upstream's build loads fonts from Excalidraw's CDN and warms up Google
+ * Fonts: Kurviq serves its fonts itself, so visitors' browsers talk to
+ * kurviq.com only (and to GitHub once they connect it).
+ */
+const EXCALIDRAW_CDN = "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/";
+const selfHosted = (text: string) =>
+  text
+    .split(EXCALIDRAW_CDN)
+    .join("/")
+    .replace(/<link rel="preconnect" href="https:\/\/fonts\.(googleapis|gstatic)\.com"[^>]*\/?>\s*/g, "");
+
+/** upstream files that only make sense on excalidraw.com */
+const UPSTREAM_ONLY = ["og-image-3.png", "favicon.svg", "screenshots"];
+
+/** favicon.ico = PNG images in an ICO container */
+const buildIco = (pngs: Buffer[]) => {
+  const header = Buffer.alloc(6 + pngs.length * 16);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(pngs.length, 4);
+  let offset = header.length;
+  pngs.forEach((png, i) => {
+    const size = png.readUInt32BE(16); // PNG IHDR width
+    const entry = 6 + i * 16;
+    header.writeUInt8(size >= 256 ? 0 : size, entry);
+    header.writeUInt8(size >= 256 ? 0 : size, entry + 1);
+    header.writeUInt16LE(1, entry + 4);
+    header.writeUInt16LE(32, entry + 6);
+    header.writeUInt32LE(png.length, entry + 8);
+    header.writeUInt32LE(offset, entry + 12);
+    offset += png.length;
+  });
+  return Buffer.concat([header, ...pngs]);
+};
+
+/** runs after upstream's plugins have written their CDN links into index.html */
+const kurviqSelfHosted = () => ({
+  name: "kurviq-self-hosted",
+  transformIndexHtml: { order: "post" as const, handler: (html: string) => selfHosted(html) },
+});
+
+const kurviqOnline = () => ({
+  name: "kurviq-online",
+  enforce: "pre" as const,
+  transform(code: string, id: string) {
+    const file = id.replace(/\\/g, "/").split("?")[0];
+    const patch = (name: string, steps: Array<[string | RegExp, string]>) => {
+      let next = code;
+      for (const [from, to] of steps) {
+        const found = typeof from === "string" ? next.includes(from) : from.test(next);
+        if (!found) {
+          throw new Error(`[excalidraw-scenes] kurviq: ${name} changed upstream (${String(from).slice(0, 60)}) — update scenes-plugin/vite.config.mts`);
+        }
+        next = next.replace(from, to);
+      }
+      return { code: next, map: null };
+    };
+    if (file.endsWith("/excalidraw-app/App.tsx")) {
+      return patch("App.tsx", [
+        // live collaboration and shareable links run on excalidraw.com's servers
+        ["const isCollabDisabled = isRunningInIframe();", "const isCollabDisabled = true; // Kurviq: no live collaboration"],
+        ["              onExportToBackend,\n", "              onExportToBackend: undefined,\n"],
+        // Excalidraw+ promotions
+        ["              renderCustomUI: excalidrawAPI\n", "              renderCustomUI: false\n"],
+        [": [ExcalidrawPlusCommand, ExcalidrawPlusAppCommand]),", ": []),"],
+      ]);
+    }
+    if (file.endsWith("/excalidraw-app/components/AppWelcomeScreen.tsx")) {
+      return patch("AppWelcomeScreen.tsx", [
+        ["<WelcomeScreen.Center.Logo />", '<WelcomeScreen.Center.Logo><span className="kq-welcome-logo">Kurviq</span></WelcomeScreen.Center.Logo>'],
+        ["{!isExcalidrawPlusSignedUser && (", "{false && ("],
+        ["<WelcomeScreen.Center.MenuItemHelp />", "<WelcomeScreen.Center.MenuItemHelp />\n          <WelcomeConnectGitHub />"],
+        // Kurviq's own words instead of upstream's storage warning
+        ["{headingContent}", "<WelcomeHeading />"],
+        [/^/, `import { WelcomeConnectGitHub, WelcomeHeading } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
+      ]);
+    }
+    if (file.endsWith("/excalidraw-app/components/AppMainMenu.tsx")) {
+      return patch("AppMainMenu.tsx", [
+        [/<MainMenu\.ItemLink\s+icon=\{ExcalLogo\}[\s\S]*?<\/MainMenu\.ItemLink>/, ""],
+        [/<MainMenu\.ItemLink\s+icon=\{loginIcon\}[\s\S]*?<\/MainMenu\.ItemLink>/, ""],
+      ]);
+    }
+    return null;
+  },
+  transformIndexHtml: {
+    order: "pre" as const,
+    handler(html: string) {
+      const meta = /<!-- Primary Meta Tags -->[\s\S]*?<link rel="canonical"[^>]*\/>/;
+      const analytics = /<!-- 100% privacy friendly analytics -->\s*<script>[\s\S]*?<\/script>/;
+      const icons = /<link rel="apple-touch-icon"[^>]*\/>\s*<link rel="icon"[^>]*\/>\s*<link rel="icon"[^>]*\/>/;
+      for (const [what, re] of [["meta tags", meta], ["analytics", analytics], ["icons", icons]] as const) {
+        if (!re.test(html)) {
+          throw new Error(`[excalidraw-scenes] kurviq: ${what} not found in index.html — update scenes-plugin/vite.config.mts`);
+        }
+      }
+      if (!html.includes('<div id="root"></div>')) {
+        throw new Error("[excalidraw-scenes] kurviq: #root not found in index.html — update scenes-plugin/vite.config.mts");
+      }
+      return html
+        .replace(/<title>[^<]*<\/title>/, `<title>${KURVIQ_TITLE}</title>`)
+        .replace(meta, KURVIQ_META)
+        .replace(analytics, "")
+        .replace(icons, KURVIQ_ICONS)
+        .replace('<h1 class="visually-hidden">Excalidraw</h1>', '<h1 class="visually-hidden">Kurviq</h1>')
+        .replace('<div id="root"></div>', KURVIQ_STATIC);
+    },
+  },
+  generateBundle(this: any) {
+    // MIT / OFL notices of everything in the bundle (minified code has no comments left)
+    this.emitFile({
+      type: "asset",
+      fileName: "third-party-licenses.txt",
+      source: thirdPartyNotices({
+        title: "Kurviq app (kurviq.com): third-party licenses",
+        files: [...this.getModuleIds()],
+        fonts: true,
+      }),
+    });
+    // imprint and privacy notice: plain pages around the app
+    const layout = readFileSync(path.join(ONLINE_DIR, "pages/_layout.html"), "utf8");
+    for (const [page, title, lang] of [["imprint", "Imprint / Impressum", "en"], ["privacy", "Privacy / Datenschutz", "en"]]) {
+      this.emitFile({
+        type: "asset",
+        fileName: `${page}.html`,
+        source: layout
+          .replace("{{lang}}", lang)
+          .replace("{{title}}", title)
+          .replace("{{content}}", readFileSync(path.join(ONLINE_DIR, `pages/${page}.html`), "utf8")),
+      });
+    }
+    this.emitFile({ type: "asset", fileName: "robots.txt", source: `User-agent: *\nAllow: /\nDisallow: /auth/\nDisallow: /mcp/\nDisallow: /live/\n\nSitemap: ${SITE}/sitemap.xml\n` });
+    this.emitFile({
+      type: "asset",
+      fileName: "sitemap.xml",
+      source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>${SITE}/</loc><lastmod>${new Date().toISOString().slice(0, 10)}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n`,
+    });
+  },
+  // after upstream's public files were copied: Kurviq's icons and images instead
+  closeBundle() {
+    const out = path.join(ONLINE_DIR, "dist/app");
+    if (!existsSync(out)) {
+      return;
+    }
+    const brand = (file: string) => readFileSync(path.join(ONLINE_DIR, "brand", file));
+    for (const [target, source] of Object.entries(KURVIQ_FILES)) {
+      writeFileSync(
+        path.join(out, target),
+        target === "favicon.ico" ? buildIco(["icon-16.png", "icon-32.png", "icon-48.png"].map(brand)) : brand(source),
+      );
+    }
+    for (const file of UPSTREAM_ONLY) {
+      rmSync(path.join(out, file), { recursive: true, force: true });
+    }
+    // stylesheets (hashed file names, so the service worker's cache stays valid)
+    for (const file of readdirSync(path.join(out, "assets"))) {
+      if (file.endsWith(".css")) {
+        const full = path.join(out, "assets", file);
+        const css = readFileSync(full, "utf8");
+        if (css.includes(EXCALIDRAW_CDN)) {
+          writeFileSync(full, selfHosted(css));
+        }
+      }
+    }
+  },
+});
+
+/** upstream's PWA setup, with Kurviq's name and the Worker's routes left to the network */
+const kurviqPwa = () =>
+  VitePWA({
+    registerType: "autoUpdate",
+    workbox: {
+      navigateFallbackDenylist: [/^\/auth\//, /^\/mcp(\/|$)/, /^\/live\//, /^\/llms\.txt$/, /^\/(imprint|privacy)(\.html)?$/, /\.txt$/],
+      globIgnores: ["fonts.css", "**/locales/**", "service-worker.js", "**/*.chunk-*.js", "**/CodeMirrorEditor-*.js"],
+      runtimeCaching: [
+        {
+          urlPattern: new RegExp(".+.woff2"),
+          handler: "CacheFirst",
+          options: {
+            cacheName: "fonts",
+            expiration: { maxEntries: 1000, maxAgeSeconds: 60 * 60 * 24 * 90 },
+            cacheableResponse: { statuses: [0, 200] },
+          },
+        },
+        { urlPattern: new RegExp("fonts.css"), handler: "StaleWhileRevalidate", options: { cacheName: "fonts", expiration: { maxEntries: 50 } } },
+        {
+          urlPattern: new RegExp("locales/[^/]+.js"),
+          handler: "CacheFirst",
+          options: { cacheName: "locales", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 } },
+        },
+        {
+          urlPattern: new RegExp("(.chunk-.+|CodeMirrorEditor-.+)\\.js"),
+          handler: "CacheFirst",
+          options: { cacheName: "chunk", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 90 } },
+        },
+      ],
+      maximumFileSizeToCacheInBytes: 2.3 * 1024 ** 2,
+    },
+    manifest: {
+      short_name: "Kurviq",
+      name: "Kurviq",
+      description: "Hand-drawn diagrams, scenes and slides, built on Excalidraw. Optionally synced with GitHub.",
+      icons: [
+        { src: "kurviq.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
+        { src: "android-chrome-192x192.png", sizes: "192x192", type: "image/png" },
+        { src: "android-chrome-512x512.png", sizes: "512x512", type: "image/png" },
+        { src: "maskable_icon_x512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+      ],
+      start_url: "/",
+      id: "kurviq",
+      display: "standalone",
+      theme_color: "#121212",
+      background_color: "#ffffff",
+      file_handlers: [{ action: "/", accept: { "application/vnd.excalidraw+json": [".excalidraw"] } }],
+      share_target: {
+        action: "/web-share-target",
+        method: "POST",
+        enctype: "multipart/form-data",
+        params: { files: [{ name: "file", accept: ["application/vnd.excalidraw+json", "application/json", ".excalidraw"] }] },
+      },
+    },
+  });
+
 export default async (configEnv: { mode: string; command: string }) => {
   const config: any = await (typeof upstreamConfig === "function"
     ? (upstreamConfig as any)(configEnv)
     : upstreamConfig);
   const env = readEnv();
+  const online = env.SCENES_TARGET === "online";
+  // online: upstream's PWA (Excalidraw's name) and sitemap (excalidraw.com) make way for Kurviq's
+  const upstreamPlugins = ((config.plugins || []) as any[])
+    .flat(Infinity)
+    .filter((plugin: any) => !online || !/^vite-plugin-(pwa|sitemap)/.test(plugin?.name || ""));
 
   return {
     ...config,
-    plugins: [injectScenesPlugin(), textPadding(), richText(), sceneUrls(), ...(config.plugins || [])],
+    plugins: [
+      injectScenesPlugin(),
+      textPadding(),
+      richText(),
+      sceneUrls(),
+      ...(online ? [kurviqOnline(), kurviqPwa()] : []),
+      ...upstreamPlugins,
+      ...(online ? [kurviqSelfHosted()] : []),
+    ],
+    ...(online
+      ? {
+          build: {
+            ...config.build,
+            outDir: path.join(ONLINE_DIR, "dist/app"),
+            emptyOutDir: true,
+            // no source maps on the public site
+            sourcemap: false,
+          },
+        }
+      : {}),
     define: {
       ...config.define,
+      "import.meta.env.VITE_APP_SCENES_TARGET": JSON.stringify(online ? "online" : "local"),
       "import.meta.env.VITE_APP_SCENES_GIT_REPO": JSON.stringify(
         env.SCENES_GIT_REPO || "",
       ),

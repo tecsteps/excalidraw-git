@@ -5,7 +5,7 @@
 
 import { Fonts, exportToSvg, getNonDeletedElements } from "@excalidraw/excalidraw";
 
-import { BASE_URL } from "./api";
+import { BASE_URL, IS_ONLINE } from "./api";
 import { withTemplate } from "./cowork";
 import { getSlides, slideData } from "./slides";
 
@@ -120,6 +120,10 @@ ${pages.map((page) => `<div class="page">${page}</div>`).join("\n")}
 
 /** print the page to a PDF (scenes server + headless Chrome) */
 export const printToPdf = async (html: string) => {
+  if (IS_ONLINE) {
+    // Kurviq has no print server: the browser's dialog does it
+    throw new Error("PDF printing needs the local scenes server");
+  }
   const res = await fetch(`${BASE_URL}/api/pdf`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
