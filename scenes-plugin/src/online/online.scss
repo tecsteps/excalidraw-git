@@ -227,6 +227,13 @@
     pointer-events: var(--ui-pointerEvents, all);
   }
 
+  // the link to /features: underlined, in the text's color
+  a.kq-welcome__features {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+
   .kq-welcome__storage {
     font-size: 0.95em;
   }
@@ -260,13 +267,6 @@
   }
 }
 
-.excalidraw .kq-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.3rem;
-
-  a.scenes-btn {
-    text-decoration: none;
-  }
+.excalidraw .kq-dialog a.scenes-btn {
+  text-decoration: none;
 }

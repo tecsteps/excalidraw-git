@@ -32,26 +32,19 @@ install:
   dialog).
 - **Connect GitHub** (optional) to sync your scenes with a repository, on all
   your devices and with other people:
-  1. Click **Connect GitHub** (welcome screen, scene menu or Scenes
-     sidebar). On GitHub, pick the account or organization and the
-     repository your scenes should go to (create an empty one first if you
-     like; private is fine), and allow Kurviq. Kurviq gets access to the
-     files of exactly these repositories, nothing else.
-  2. Back in Kurviq, sync is on: with one repository picked it starts right
-     away (your existing scenes come along); with several, Kurviq asks which
-     one. Already set up on another device? **Sign in** instead.
+  Click **Connect GitHub** (welcome screen, scene menu or Scenes sidebar)
+  and allow the Kurviq app for your account on GitHub. Back in Kurviq,
+  your scenes sync with the private repository `<your account>/kurviq-scenes`
+  (Kurviq creates it if it doesn't exist; your existing scenes come along).
+  Kurviq gets access to the files of the repositories you allow, nothing
+  else. Already set up on another device? **Sign in** instead.
 
   Scenes are stored as `scenes/<name>.excalidraw`, pushed about 10 s after
   you stop drawing; changes by others arrive within a minute and are merged
   element by element (see [Sync with GitHub](#sync-with-github)). The
   connection stays for months: Kurviq keeps GitHub's refresh token in an
   encrypted, httpOnly cookie of your browser; its server stores nothing.
-  **Disconnect** or **Change repository** any time in the sidebar.
-- **Several people, one repository:** everyone opens kurviq.com in their own
-  browser, connects their own GitHub account and picks the same repository
-  (the repository owner installs the Kurviq app on it once, and gives the
-  others write access as usual on GitHub). Commits are made by each person's
-  own account. A local install (`npm start`) can use the same repository.
+  **Disconnect** any time in the sidebar.
 - **AI agents (MCP):** click **MCP** (top left). Kurviq shows a prompt with a
   personal link `https://kurviq.com/mcp/<key>`; give it to your agent (Claude
   Code, Codex, Cursor, Claude, …). The agent then works through your open
@@ -85,7 +78,9 @@ the Worker (`worker/`), `wrangler.jsonc` and `llms.txt`.
 - GitHub App: callback URLs `https://<your domain>/auth/callback` (and
   `http://localhost:8787/auth/callback`), "Request user authorization
   (OAuth) during installation" on, user token expiry on, webhook off,
-  repository permission Contents: read and write. No private key needed.
+  repository permissions Contents: read and write, plus Administration:
+  read and write so Kurviq can create `kurviq-scenes` (without it, users
+  are sent to GitHub's "new repository" form). No private key needed.
 - kurviq.com is deployed by GitHub Actions
   ([`.github/workflows/deploy-kurviq.yml`](.github/workflows/deploy-kurviq.yml))
   on every push to `main`, with the repository secrets `CLOUDFLARE_API_TOKEN`

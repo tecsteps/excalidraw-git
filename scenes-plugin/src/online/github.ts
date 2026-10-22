@@ -601,32 +601,50 @@ export const githubScenes = {
 // repos the user can pick (where the GitHub App is installed)
 // -----------------------------------------------------------------------------
 
-/** @param only just the repositories of this installation (e.g. the one just made) */
-export const listRepos = async ({ only }: { only?: number } = {}): Promise<RepoChoice[]> => {
-  const installations = await gh("/user/installations?per_page=100");
-  if (installations.status !== 200) {
-    fail(installations, "Could not list your GitHub App installations");
+/** the repository Kurviq syncs with: <account>/kurviq-scenes */
+export const SCENES_REPO = "kurviq-scenes";
+
+/** <owner>/kurviq-scenes, if Kurviq can write to it */
+export const findScenesRepo = async (owner: string): Promise<RepoChoice | null> => {
+  const res = await gh(`/repos/${encodeURIComponent(owner)}/${SCENES_REPO}`);
+  if (res.status === 404 || res.status === 403) {
+    return null; // missing, or Kurviq has no access to it
   }
-  const repos: RepoChoice[] = [];
-  for (const installation of installations.data.installations || []) {
-    if (only !== undefined && installation.id !== only) {
-      continue;
-    }
-    for (let page = 1; page <= 10; page++) {
-      const res = await gh(`/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
-      if (res.status !== 200) {
-        break;
-      }
-      for (const repo of res.data.repositories || []) {
-        if (repo.permissions?.push !== false) {
-          repos.push({ owner: repo.owner.login, name: repo.name, branch: repo.default_branch || "main", private: !!repo.private });
-        }
-      }
-      if ((res.data.repositories || []).length < 100) {
-        break;
-      }
-    }
+  if (res.status !== 200) {
+    fail(res, "Could not look up your repository");
   }
-  repos.sort((a, b) => `${a.owner}/${a.name}`.localeCompare(`${b.owner}/${b.name}`));
-  return repos;
+  if (res.data.permissions?.push === false) {
+    return null;
+  }
+  return { owner: res.data.owner.login, name: res.data.name, branch: res.data.default_branch || "main", private: !!res.data.private };
+};
+
+/** is the Kurviq app installed on this account? (needed for any repository access) */
+export const isInstalledFor = async (login: string) => {
+  const res = await gh("/user/installations?per_page=100");
+  if (res.status !== 200) {
+    fail(res, "Could not check the Kurviq app on GitHub");
+  }
+  return (res.data.installations || []).some((installation: any) => installation.account?.login === login);
+};
+
+/**
+ * Create the private repository kurviq-scenes. "exists": it is there, but
+ * Kurviq can't see it; "forbidden": the app may not create repositories.
+ */
+export const createScenesRepo = async (): Promise<"created" | "exists" | "forbidden"> => {
+  const res = await gh("/user/repos", {
+    method: "POST",
+    body: { name: SCENES_REPO, private: true, auto_init: true, description: "Drawings from Kurviq (https://kurviq.com)" },
+  });
+  if (res.status === 201) {
+    return "created";
+  }
+  if (res.status === 422) {
+    return "exists";
+  }
+  if (res.status === 403 || res.status === 404) {
+    return "forbidden";
+  }
+  return fail(res, "Could not create the repository");
 };

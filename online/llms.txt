@@ -32,8 +32,7 @@ The MCP server's instructions (sent on connect) explain everything in detail. In
 ## GitHub (optional, per browser)
 
 - Without GitHub every scene is local-only: it exists only in that browser. Agents read and edit local-only scenes the same way.
-- With GitHub (Scenes sidebar → Connect GitHub → install the Kurviq GitHub App on a repository → pick it → Activate sync), scenes are stored as `scenes/<name>.excalidraw` in that repository. Edits are pushed about 10 s after the user stops drawing; other people's changes arrive within a minute and are merged element by element. Agent edits are commits by the user's GitHub account, marked with a `Scenes-Source: agent` trailer.
-- Several people (and their agents) can use the same repository: each connects their own GitHub account in their own browser and picks the same repository.
+- With GitHub (Connect GitHub → allow the Kurviq GitHub App), scenes are stored as `scenes/<name>.excalidraw` in the user's private repository `<account>/kurviq-scenes` (Kurviq creates it). Edits are pushed about 10 s after the user stops drawing; other people's changes arrive within a minute and are merged element by element. Agent edits are commits by the user's GitHub account, marked with a `Scenes-Source: agent` trailer.
 - The connection stays for months: Kurviq keeps a refresh token in an encrypted, httpOnly cookie of the browser (nothing is stored on Kurviq's server). Disconnect any time in the Scenes sidebar.
 
 ## Limits of the online version
