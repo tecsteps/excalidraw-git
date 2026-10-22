@@ -62,9 +62,10 @@ install:
   Agents find everything they need at <https://kurviq.com/llms.txt>.
 
 - **Public scenes:** <https://kurviq.com/features> shows everything Kurviq
-  adds, as a deck. Files in `online/scenes/` are served at
-  `kurviq.com/<name>`; the first visit puts a local-only copy into the
-  visitor's browser (updated with new versions until the visitor changes it).
+  adds, as a deck. Decks in `online/scenes/` (listed in
+  `scenes-plugin/src/publicScene.tsx`) open at `kurviq.com/<name>` in a
+  read-only viewer above the editor; they are not added to the visitor's
+  scenes unless they click **Make a copy**.
 
 Differences to the local install: Excalidraw's live collaboration and
 shareable links (excalidraw.com servers) are switched off, agents need your

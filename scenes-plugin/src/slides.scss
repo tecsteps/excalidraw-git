@@ -592,3 +592,76 @@ body.slides-presenting {
     font-size: 0.7rem;
   }
 }
+
+// public scenes (kurviq.com/features): a read-only slide viewer above the editor
+.excalidraw .public-scene {
+  position: fixed;
+  inset: 0;
+  // above everything of the editor, docked sidebars included
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-low, #f1f0ff);
+  color: var(--text-primary-color);
+  pointer-events: all;
+  outline: none;
+
+  &__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--island-bg-color);
+    border-bottom: 1px solid var(--default-border-color);
+    font-size: 0.9rem;
+  }
+
+  &__spacer {
+    flex: 1;
+  }
+
+  &__error {
+    margin: 1rem;
+  }
+
+  &__stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    cursor: pointer;
+  }
+
+  &__slide {
+    width: min(100%, calc((100vh - 9rem) * 16 / 9));
+    aspect-ratio: 16 / 9;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+    overflow: hidden;
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  &__nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0 1rem 1rem;
+  }
+
+  &__count {
+    min-width: 4rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-gray-50);
+  }
+}

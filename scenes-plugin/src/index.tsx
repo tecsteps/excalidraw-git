@@ -19,6 +19,7 @@ import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
 import { PresentationOverlay } from "./present";
+import { PublicSceneOverlay } from "./publicScene";
 import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
 import { connection } from "./online/github";
@@ -1030,6 +1031,7 @@ export const ScenesSidebar = () => {
     <SlidesSidebar />
     <PresentationOverlay />
     <SlideSorterOverlay />
+    <PublicSceneOverlay />
     </>
   );
 };
