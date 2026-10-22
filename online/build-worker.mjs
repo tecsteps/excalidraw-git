@@ -6,12 +6,22 @@
 // the local MCP server (scenes-mcp/node_modules links there).
 import { build } from "esbuild";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { thirdPartyNotices } from "./licenses.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** the commit a build is made from (Actions: GITHUB_SHA), the same as the app's (scenes-plugin/vite.config.mts) */
+const kurviqBuild = () => {
+  try {
+    return (process.env.GITHUB_SHA || execSync("git rev-parse HEAD", { encoding: "utf8" })).trim().slice(0, 12);
+  } catch {
+    return "";
+  }
+};
 
 const result = await build({
   entryPoints: [path.join(HERE, "worker/index.ts")],
@@ -32,6 +42,8 @@ const result = await build({
   define: {
     "import.meta.filename": JSON.stringify("/bundle/server.js"),
     "import.meta.dirname": JSON.stringify("/bundle"),
+    // the commit this build is made from: agent commands carry it, an older tab notices
+    __KURVIQ_BUILD__: JSON.stringify(kurviqBuild()),
   },
   loader: { ".md": "text", ".txt": "text", ".html": "text" },
   minify: process.env.KURVIQ_DEBUG !== "1",

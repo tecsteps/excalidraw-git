@@ -20,6 +20,9 @@ type TabState = {
   github?: boolean;
 };
 
+/** the commit this Worker is built from (online/build-worker.mjs) */
+declare const __KURVIQ_BUILD__: string;
+
 type Attachment = { tab: string; connectedAt: number; state: TabState };
 
 /** connected tabs per agent link (one person, a few tabs and devices) */
@@ -104,7 +107,8 @@ export class Pairing extends DurableObject {
         reject(httpError(504, "The Kurviq tab did not answer in time (is it in the background on a phone, or busy?)"));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer, tab: (ws.deserializeAttachment() as Attachment).tab });
-      sendMessage(ws, { type: "command", id, command });
+      // with this build: a tab running an older version says so instead of half-working
+      sendMessage(ws, { type: "command", id, command, build: __KURVIQ_BUILD__ });
     });
   }
 

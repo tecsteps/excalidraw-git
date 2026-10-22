@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   VITE_APP_SCENES_GIT_BRANCH: string;
   /** "local" (scenes server on this machine) or "online" (Kurviq, GitHub API in the browser) */
   VITE_APP_SCENES_TARGET: string;
+  /** online: the commit the build is made from */
+  VITE_APP_KURVIQ_BUILD: string;
 }
 
 declare module "*.woff2" {

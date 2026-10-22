@@ -17,7 +17,7 @@
 import { FONT_FAMILY, Fonts } from "@excalidraw/excalidraw";
 import { FONT_METADATA } from "@excalidraw/common";
 import { ExcalidrawFontFace } from "@excalidraw/excalidraw/fonts/ExcalidrawFontFace";
-import { createStore, entries, set } from "idb-keyval";
+import { createStore, entries, get, set } from "idb-keyval";
 
 export type FontFaceData = {
   /** data URL of the font file (woff2 / woff / ttf / otf) */
@@ -155,10 +155,24 @@ export const registerFont = (font: CustomFont): Promise<void> => {
 
 const library = createStore("kurviq-fonts", "fonts");
 
-/** register a font and keep it for this browser's other scenes */
+/** the other Kurviq tabs of this browser hear about a new font (the agent may work through one of them) */
+const tabs = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("kurviq-fonts") : null;
+tabs?.addEventListener("message", (event) => {
+  if (typeof event.data === "string") {
+    get<CustomFont>(event.data, library)
+      .then((font) => font && registerFont(font))
+      .catch(() => {});
+  }
+});
+
+/** register a font and keep it for this browser's other scenes (and its other tabs) */
 export const addFont = async (font: CustomFont) => {
+  const known = registered.has(font.id);
   await registerFont(font);
   await set(font.family.toLowerCase(), font, library).catch(() => {});
+  if (!known) {
+    tabs?.postMessage(font.family.toLowerCase());
+  }
 };
 
 /** on start: every font this browser has seen */

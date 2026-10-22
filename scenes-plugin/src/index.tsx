@@ -33,6 +33,7 @@ import {
   ReadOnlyGuard,
   RepoSetupDialog,
   SceneSharing,
+  UpdateBanner,
   startOnline,
 } from "./online/ui";
 
@@ -1057,6 +1058,7 @@ export const ScenesSidebar = () => {
     <AddFontOverlay />
     {IS_ONLINE && <RepoSetupDialog />}
     {IS_ONLINE && <ReadOnlyGuard />}
+    {IS_ONLINE && <UpdateBanner />}
     </>
   );
 };

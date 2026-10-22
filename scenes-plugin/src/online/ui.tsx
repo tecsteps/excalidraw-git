@@ -37,6 +37,7 @@ import lilitaLatin from "@excalidraw/excalidraw/fonts/Lilita/Lilita-Regular-i7dP
 
 import { deck } from "../deck";
 import { publicScene } from "../publicScene";
+import { appVersion, reloadApp } from "./version";
 import { openPublicScene } from "../router";
 
 import "./online.scss";
@@ -644,6 +645,19 @@ export const SceneSharing = ({ item, disabled }: { item: SceneListItem; disabled
       )}
     </>
   );
+};
+
+/** Kurviq was updated while this tab was open: the agent's commands wait for a reload */
+export const UpdateBanner = () => {
+  const outdated = useSyncExternalStore(appVersion.subscribe, appVersion.isOutdated);
+  return outdated ? (
+    <div className="kq-update" role="status">
+      <span>Kurviq was updated. Reload to continue with your agent (your work is saved).</span>
+      <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => reloadApp()}>
+        Reload
+      </button>
+    </div>
+  ) : null;
 };
 
 /** a read-only space: the editor shows the scenes, nothing can be changed */

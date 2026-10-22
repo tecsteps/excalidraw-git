@@ -5,6 +5,7 @@
 // its env dir relative to cwd), e.g.:
 //   cd excalidraw/excalidraw-app && npx vite --config ../../scenes-plugin/vite.config.mts
 
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -703,6 +704,15 @@ const securityHeaders = (html: string) => {
 `;
 };
 
+/** the commit a build is made from (Actions: GITHUB_SHA) */
+const kurviqBuild = () => {
+  try {
+    return (process.env.GITHUB_SHA || execSync("git rev-parse HEAD", { cwd: HERE, encoding: "utf8" })).trim().slice(0, 12);
+  } catch {
+    return "";
+  }
+};
+
 /** upstream's PWA setup, with Kurviq's name and the Worker's routes left to the network */
 const kurviqPwa = () =>
   VitePWA({
@@ -804,6 +814,8 @@ export default async (configEnv: { mode: string; command: string }) => {
     define: {
       ...config.define,
       "import.meta.env.VITE_APP_SCENES_TARGET": JSON.stringify(online ? "online" : "local"),
+      // the commit this build is made from (the Worker gets the same: a tab can tell it is outdated)
+      "import.meta.env.VITE_APP_KURVIQ_BUILD": JSON.stringify(online ? kurviqBuild() : ""),
       "import.meta.env.VITE_APP_SCENES_GIT_REPO": JSON.stringify(
         env.SCENES_GIT_REPO || "",
       ),

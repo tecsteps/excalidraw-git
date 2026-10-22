@@ -41,6 +41,7 @@ import { addFont, customFonts, fontFamilyValue, fontFromGoogle } from "./fonts";
 import { leanScene } from "./leanFiles";
 import { keepUpload, withUploads } from "./uploads";
 import { createReceiver, sendMessage } from "./online/frames";
+import { OUTDATED_MESSAGE, checkServerBuild } from "./online/version";
 import { connection } from "./online/github";
 import { pairing } from "./online/pairing";
 import { serveRequest } from "./online/tabServer";
@@ -837,11 +838,16 @@ const openSocket = () => {
       return;
     }
     if (event.type === "command") {
-      handleCommand(event, (payload) => {
+      const answer = (payload: { ok: boolean; result?: unknown; error?: string }) => {
         if (ws.readyState === WebSocket.OPEN) {
           sendMessage(ws, { type: "result", id: event.id, ...payload });
         }
-      });
+      };
+      if (checkServerBuild(event.build)) {
+        answer({ ok: false, error: OUTDATED_MESSAGE });
+        return;
+      }
+      handleCommand(event, answer);
     } else if (event.type === "scene-saved" || event.type === "scene-renamed" || event.type === "scene-deleted") {
       scenesController.syncNow();
     }
