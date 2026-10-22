@@ -601,13 +601,17 @@ export const githubScenes = {
 // repos the user can pick (where the GitHub App is installed)
 // -----------------------------------------------------------------------------
 
-export const listRepos = async (): Promise<RepoChoice[]> => {
+/** @param only just the repositories of this installation (e.g. the one just made) */
+export const listRepos = async ({ only }: { only?: number } = {}): Promise<RepoChoice[]> => {
   const installations = await gh("/user/installations?per_page=100");
   if (installations.status !== 200) {
     fail(installations, "Could not list your GitHub App installations");
   }
   const repos: RepoChoice[] = [];
   for (const installation of installations.data.installations || []) {
+    if (only !== undefined && installation.id !== only) {
+      continue;
+    }
     for (let page = 1; page <= 10; page++) {
       const res = await gh(`/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
       if (res.status !== 200) {

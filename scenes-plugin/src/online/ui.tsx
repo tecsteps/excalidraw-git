@@ -38,8 +38,80 @@ let started = false;
 /** the answer of a GitHub redirect, read before anything can rewrite the URL */
 const githubAnswer = new URLSearchParams(window.location.search).get("github");
 
-/** @param openScenes opens the Scenes sidebar (where the repository is chosen) */
-export const startOnline = ({ openScenes }: { openScenes: () => void }) => {
+/** the installation GitHub just made or changed (its repositories were picked there) */
+const githubInstallation = Number(new URLSearchParams(window.location.search).get("installation")) || undefined;
+
+// the end of "Connect GitHub", as a dialog: sync is on (one repository was
+// picked on GitHub), or pick one (several, or none known)
+type Setup = null | { step: "pick"; only?: number } | { step: "done"; repo: RepoChoice; published: number };
+let setup: Setup = null;
+const setupListeners = new Set<() => void>();
+const setSetup = (next: Setup) => {
+  setup = next;
+  setupListeners.forEach((listener) => listener());
+};
+const useSetup = () =>
+  useSyncExternalStore(
+    (listener) => {
+      setupListeners.add(listener);
+      return () => {
+        setupListeners.delete(listener);
+      };
+    },
+    () => setup,
+  );
+
+const localOnlyScenes = () =>
+  scenesController
+    .getState()
+    .list.filter((item) => item.name !== null && item.localOnly)
+    .map((item) => item.name!);
+
+/** sync with this repository from now on; returns how many local-only scenes went along */
+const activateRepo = async (repo: RepoChoice, { publishExisting }: { publishExisting: boolean }) => {
+  const current = connection.getState().repo;
+  const switching = !!current && (current.owner !== repo.owner || current.name !== repo.name);
+  chooseRepo(repo);
+  // from now on new scenes go to GitHub with auto-sync
+  scenesController.setNewScenesLocalOnly(false);
+  if (switching) {
+    await scenesController.resetGitHubState();
+  }
+  let published = 0;
+  if (publishExisting) {
+    for (const name of localOnlyScenes()) {
+      await scenesController.setLocalOnly(name, false).then(
+        () => published++,
+        () => {},
+      );
+    }
+  }
+  scenesController.syncNow({ refresh: true });
+  return published;
+};
+
+/** back from GitHub: finish the setup */
+const finishConnect = async (repo: RepoChoice | undefined) => {
+  // repositories picked on GitHub just now; without an installation (plain
+  // sign-in) only when there is no repository yet
+  if (repo && !githubInstallation) {
+    return;
+  }
+  try {
+    const repos = await listRepos({ only: githubInstallation });
+    const same = repos.length === 1 && repo && repos[0].owner === repo.owner && repos[0].name === repo.name;
+    if (repos.length === 1 && !same) {
+      const published = await activateRepo(repos[0], { publishExisting: true });
+      setSetup({ step: "done", repo: repos[0], published });
+    } else if (!same) {
+      setSetup({ step: "pick", only: repos.length ? githubInstallation : undefined });
+    }
+  } catch {
+    setSetup({ step: "pick" });
+  }
+};
+
+export const startOnline = () => {
   if (started) {
     return;
   }
@@ -57,6 +129,7 @@ export const startOnline = ({ openScenes }: { openScenes: () => void }) => {
         ? "GitHub connection cancelled."
         : "GitHub connection failed — please try again.";
     params.delete("github");
+    params.delete("installation");
     const query = params.toString();
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }
@@ -68,8 +141,8 @@ export const startOnline = ({ openScenes }: { openScenes: () => void }) => {
     const { user, repo } = connection.getState();
     if (showSetup && user !== undefined) {
       showSetup = false;
-      if (user && !repo) {
-        setTimeout(openScenes, 0);
+      if (user) {
+        finishConnect(repo);
       }
     }
     const key = JSON.stringify([user?.login ?? null, repo]);
@@ -90,7 +163,31 @@ const repoUrl = (repo: RepoChoice) => `https://github.com/${repo.owner}/${repo.n
 /** GitHub's "new repository" form, filled in (opens in a new tab) */
 const NEW_REPO_URL = "https://github.com/new?name=kurviq-scenes&visibility=private&description=My+Kurviq+scenes";
 
-const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
+/** GitHub's installation can't create a repository: that comes first, in a new tab */
+const NewRepoHint = () => (
+  <span className="kq-muted kq-left">
+    Want a new one?{" "}
+    <a href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
+      Create it on GitHub
+    </a>{" "}
+    first (private is fine), then choose it.
+  </span>
+);
+
+/**
+ * @param onDone shows "Cancel" and is called after "Activate sync" too
+ * @param onActivated called after "Activate sync"
+ */
+const RepoPicker = ({
+  onDone,
+  onActivated,
+  only,
+}: {
+  onDone?: () => void;
+  onActivated?: () => void;
+  /** just the repositories of this installation */
+  only?: number;
+}) => {
   const { repo: current } = useConnection();
   const [repos, setRepos] = useState<RepoChoice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +197,7 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
   useEffect(() => {
     let known = "";
     const load = () =>
-      listRepos()
+      listRepos({ only })
         .then((found) => {
           const names = found.map((r) => `${r.owner}/${r.name}`);
           setRepos(found);
@@ -127,30 +224,16 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  const localOnly = scenesController
-    .getState()
-    .list.filter((item) => item.name !== null && item.localOnly)
-    .map((item) => item.name!);
+  const localOnly = localOnlyScenes();
 
   const activate = async () => {
     const repo = repos?.find((r) => `${r.owner}/${r.name}` === picked);
     if (!repo) {
       return;
     }
-    const switching = !!current && (current.owner !== repo.owner || current.name !== repo.name);
-    chooseRepo(repo);
-    // from now on new scenes go to GitHub with auto-sync
-    scenesController.setNewScenesLocalOnly(false);
-    if (switching) {
-      await scenesController.resetGitHubState();
-    }
-    if (publishExisting) {
-      for (const name of localOnly) {
-        await scenesController.setLocalOnly(name, false).catch(() => {});
-      }
-    }
-    scenesController.syncNow({ refresh: true });
+    await activateRepo(repo, { publishExisting });
     onDone?.();
+    onActivated?.();
   };
 
   if (error) {
@@ -163,23 +246,15 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
     return (
       <div className="kq-stack">
         <div className="kq-muted">
-          Kurviq has no access to a repository yet. You decide which one: Kurviq only sees the repositories you pick.
+          Kurviq has no access to a repository yet. On GitHub you pick the account or organization and the repository;
+          Kurviq only sees what you pick, and syncs as soon as you're back.
         </div>
-        <div className="kq-choice">
+        <div className="scenes-row">
           <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
-            Use an existing repository
+            Choose a repository on GitHub
           </button>
-          <span className="kq-muted">Pick it on GitHub, then you're back here.</span>
         </div>
-        <div className="kq-choice">
-          <a className="scenes-btn" href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
-            Create a new repository
-          </a>
-          <span className="kq-muted">
-            Opens GitHub in a new tab. Create it (private is fine), come back, then click "Use an existing repository"
-            and pick it.
-          </span>
-        </div>
+        <NewRepoHint />
       </div>
     );
   }
@@ -217,9 +292,7 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
       <button type="button" className="scenes-link kq-left" onClick={() => connectGitHub("install")}>
         Another repository? Give Kurviq access on GitHub…
       </button>
-      <a className="scenes-link kq-left" href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
-        Create a new repository on GitHub…
-      </a>
+      <NewRepoHint />
     </div>
   );
 };
@@ -233,7 +306,7 @@ export const ConnectGitHubOffer = () => {
   return (
     <div className="kq-switcher-github">
       <span className="kq-muted">Scenes are saved in this browser only.</span>
-      <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("login")}>
+      <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
         <span className="kq-icon">{GithubIcon}</span> Connect GitHub
       </button>
     </div>
@@ -321,7 +394,7 @@ export const WelcomeConnectGitHub = () => {
     return null;
   }
   return (
-    <WelcomeScreen.Center.MenuItem onSelect={() => connectGitHub("login")} icon={GithubIcon} shortcut={null}>
+    <WelcomeScreen.Center.MenuItem onSelect={() => connectGitHub("install")} icon={GithubIcon} shortcut={null}>
       Connect GitHub to sync
     </WelcomeScreen.Center.MenuItem>
   );
@@ -346,10 +419,17 @@ export const GitHubPanel = () => {
         </div>
         {error && <div className="scenes-error">{error}</div>}
         <div className="scenes-row">
-          <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("login")}>
+          <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
             <span className="kq-icon">{GithubIcon}</span> Connect GitHub
           </button>
         </div>
+        <span className="kq-muted kq-left">
+          You pick the account and repository on GitHub, then sync starts.{" "}
+          <button type="button" className="scenes-link" onClick={() => connectGitHub("login")}>
+            Already set up? Sign in
+          </button>
+        </span>
+        <NewRepoHint />
       </section>
     );
   }
@@ -411,6 +491,76 @@ export const GitHubPanel = () => {
         </button>
       </div>
     </section>
+  );
+};
+
+/** the end of "Connect GitHub" (rendered next to the editor, see index.tsx) */
+export const RepoSetupDialog = () => {
+  const current = useSetup();
+  const { user, repo } = useConnection();
+  const close = () => setSetup(null);
+
+  useEffect(() => {
+    if (!current) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [current]);
+
+  if (!current || !user) {
+    return null;
+  }
+  if (current.step === "done") {
+    return (
+      <div className="kq-overlay">
+        <div className="kq-dialog kq-dialog--narrow" role="dialog" aria-modal="true" aria-labelledby="kq-setup-title">
+          <h2 id="kq-setup-title">Synced with GitHub ✓</h2>
+          <p>
+            Your scenes now sync with{" "}
+            <a href={repoUrl(current.repo)} target="_blank" rel="noopener noreferrer">
+              {current.repo.owner}/{current.repo.name}
+            </a>
+            , as <strong>{user.login}</strong>.
+          </p>
+          <p className="kq-muted">
+            {current.published
+              ? `${current.published} scene${current.published === 1 ? "" : "s"} from this browser ${
+                  current.published === 1 ? "goes" : "go"
+                } there now. `
+              : ""}
+            Every change is saved there a few seconds after you stop drawing. Repository and connection: Scenes sidebar
+            (click the scene name, top left).
+          </p>
+          <div className="scenes-row">
+            <button type="button" className="scenes-btn scenes-btn--primary" onClick={close}>
+              Start drawing
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (repo) {
+    return null;
+  }
+  return (
+    <div className="kq-overlay">
+      <div className="kq-dialog kq-dialog--narrow" role="dialog" aria-modal="true" aria-labelledby="kq-setup-title">
+        <div className="kq-dialog__head">
+          <h2 id="kq-setup-title">Connected as {user.login}. One more step</h2>
+          <button type="button" className="kq-close" aria-label="Close" onClick={close}>
+            ×
+          </button>
+        </div>
+        <p>Which GitHub repository should your scenes sync with?</p>
+        <RepoPicker only={current.only} onActivated={close} />
+        <button type="button" className="scenes-link kq-left" onClick={close}>
+          Later (it's in the Scenes sidebar, top left)
+        </button>
+      </div>
+    </div>
   );
 };
 

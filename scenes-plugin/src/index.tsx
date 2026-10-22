@@ -23,7 +23,7 @@ import { PublicSceneOverlay } from "./publicScene";
 import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
 import { connection } from "./online/github";
-import { ConnectGitHubOffer, GitHubPanel, KurviqFooter, McpButton, startOnline } from "./online/ui";
+import { ConnectGitHubOffer, GitHubPanel, KurviqFooter, McpButton, RepoSetupDialog, startOnline } from "./online/ui";
 
 import type { Activity, SceneListItem, ScenesState, SyncStatus } from "./controller";
 
@@ -99,7 +99,7 @@ const useAttachController = () => {
       connectLive();
       if (!IS_RENDERER) {
         if (IS_ONLINE) {
-          startOnline({ openScenes: () => api.toggleSidebar({ name: SCENES_SIDEBAR_NAME, force: true }) });
+          startOnline();
         }
         deck.attach(api);
         connectRouter();
@@ -1032,6 +1032,7 @@ export const ScenesSidebar = () => {
     <PresentationOverlay />
     <SlideSorterOverlay />
     <PublicSceneOverlay />
+    {IS_ONLINE && <RepoSetupDialog />}
     </>
   );
 };

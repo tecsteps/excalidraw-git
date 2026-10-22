@@ -32,15 +32,14 @@ install:
   dialog).
 - **Connect GitHub** (optional) to sync your scenes with a repository, on all
   your devices and with other people:
-  1. Open the **Scenes** sidebar (click the scene name, top left) and click
-     **Connect GitHub**. Sign in to GitHub and allow Kurviq.
-  2. If Kurviq can't see a repository yet, click **Choose repositories on
-     GitHub** and install the Kurviq GitHub App on the repository your scenes
-     should go to (create an empty one first if you like; private is fine).
-     Kurviq gets access to the files of exactly these repositories, nothing
-     else.
-  3. Pick the repository and click **Activate sync** (tick "Also sync my
-     existing scenes" to bring along what you drew before).
+  1. Click **Connect GitHub** (welcome screen, scene menu or Scenes
+     sidebar). On GitHub, pick the account or organization and the
+     repository your scenes should go to (create an empty one first if you
+     like; private is fine), and allow Kurviq. Kurviq gets access to the
+     files of exactly these repositories, nothing else.
+  2. Back in Kurviq, sync is on: with one repository picked it starts right
+     away (your existing scenes come along); with several, Kurviq asks which
+     one. Already set up on another device? **Sign in** instead.
 
   Scenes are stored as `scenes/<name>.excalidraw`, pushed about 10 s after
   you stop drawing; changes by others arrive within a minute and are merged

@@ -97,7 +97,8 @@
   .kq-overlay {
     position: fixed;
     inset: 0;
-    z-index: 100;
+    // above everything of the editor, docked sidebars included
+    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -128,6 +129,11 @@
     p {
       margin: 0;
     }
+  }
+
+  .kq-dialog--narrow {
+    width: min(28rem, 100%);
+    font-size: 0.9rem;
   }
 
   .kq-dialog__head {

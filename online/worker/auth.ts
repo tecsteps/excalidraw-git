@@ -232,7 +232,13 @@ export const handleAuth = async (request: Request, env: AuthEnv): Promise<Respon
     if (!session) {
       return redirect(withParam(back, "github", "failed"), [clearState]);
     }
-    return redirect(withParam(back, "github", "connected"), [clearState, await sessionCookie(request, env, session)]);
+    // after an installation: which one, so the app can go straight to its repositories
+    const installation = url.searchParams.get("installation_id");
+    const done = withParam(back, "github", "connected");
+    return redirect(/^\d+$/.test(installation ?? "") ? withParam(done, "installation", installation!) : done, [
+      clearState,
+      await sessionCookie(request, env, session),
+    ]);
   }
 
   if (url.pathname === "/auth/token" && request.method === "POST") {
