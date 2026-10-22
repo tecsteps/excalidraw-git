@@ -35,8 +35,11 @@ const usePairingKey = () => useSyncExternalStore(pairing.subscribe, pairing.getK
 
 let notice: string | null = null;
 let started = false;
+/** the answer of a GitHub redirect, read before anything can rewrite the URL */
+const githubAnswer = new URLSearchParams(window.location.search).get("github");
 
-export const startOnline = () => {
+/** @param openScenes opens the Scenes sidebar (where the repository is chosen) */
+export const startOnline = ({ openScenes }: { openScenes: () => void }) => {
   if (started) {
     return;
   }
@@ -45,7 +48,7 @@ export const startOnline = () => {
   navigator.storage?.persist?.().catch(() => {});
 
   const params = new URLSearchParams(window.location.search);
-  const answer = params.get("github");
+  const answer = githubAnswer;
   if (answer) {
     notice =
       answer === "connected"
@@ -58,9 +61,17 @@ export const startOnline = () => {
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }
 
+  // back from GitHub without a repository yet: show the next step right away
+  let showSetup = answer === "connected";
   let last = "";
   connection.subscribe(() => {
     const { user, repo } = connection.getState();
+    if (showSetup && user !== undefined) {
+      showSetup = false;
+      if (user && !repo) {
+        setTimeout(openScenes, 0);
+      }
+    }
     const key = JSON.stringify([user?.login ?? null, repo]);
     if (key !== last) {
       last = key;
@@ -76,6 +87,9 @@ export const startOnline = () => {
 
 const repoUrl = (repo: RepoChoice) => `https://github.com/${repo.owner}/${repo.name}`;
 
+/** GitHub's "new repository" form, filled in (opens in a new tab) */
+const NEW_REPO_URL = "https://github.com/new?name=kurviq-scenes&visibility=private&description=My+Kurviq+scenes";
+
 const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
   const { repo: current } = useConnection();
   const [repos, setRepos] = useState<RepoChoice[] | null>(null);
@@ -84,13 +98,33 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
   const [publishExisting, setPublishExisting] = useState(true);
 
   useEffect(() => {
-    listRepos()
-      .then((found) => {
-        setRepos(found);
-        const keep = current && found.find((r) => r.owner === current.owner && r.name === current.name);
-        setPicked(keep ? `${keep.owner}/${keep.name}` : found[0] ? `${found[0].owner}/${found[0].name}` : "");
-      })
-      .catch((err) => setError(err.message));
+    let known = "";
+    const load = () =>
+      listRepos()
+        .then((found) => {
+          const names = found.map((r) => `${r.owner}/${r.name}`);
+          setRepos(found);
+          setError(null);
+          // a repository that just appeared (created / given access in another tab) is the one to pick
+          const added = known ? names.find((name) => !known.split("\n").includes(name)) : undefined;
+          known = names.join("\n");
+          setPicked((picked) => {
+            if (added) {
+              return added;
+            }
+            if (picked && names.includes(picked)) {
+              return picked;
+            }
+            const keep = current && names.find((name) => name === `${current.owner}/${current.name}`);
+            return keep ?? names[0] ?? "";
+          });
+        })
+        .catch((err) => setError(err.message));
+    load();
+    // back from GitHub's tab (new repository, access given): look again
+    const onFocus = () => document.visibilityState === "visible" && load();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   const localOnly = scenesController
@@ -129,13 +163,22 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
     return (
       <div className="kq-stack">
         <div className="kq-muted">
-          Kurviq can't see any repository yet. Install the Kurviq GitHub App on the repository your scenes should go
-          to (a new, empty one is fine).
+          Kurviq has no access to a repository yet. You decide which one: Kurviq only sees the repositories you pick.
         </div>
-        <div className="scenes-row">
+        <div className="kq-choice">
           <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
-            Choose repositories on GitHub
+            Use an existing repository
           </button>
+          <span className="kq-muted">Pick it on GitHub, then you're back here.</span>
+        </div>
+        <div className="kq-choice">
+          <a className="scenes-btn" href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
+            Create a new repository
+          </a>
+          <span className="kq-muted">
+            Opens GitHub in a new tab. Create it (private is fine), come back, then click "Use an existing repository"
+            and pick it.
+          </span>
         </div>
       </div>
     );
@@ -172,8 +215,11 @@ const RepoPicker = ({ onDone }: { onDone?: () => void }) => {
         )}
       </div>
       <button type="button" className="scenes-link kq-left" onClick={() => connectGitHub("install")}>
-        Another repository? Choose it on GitHub…
+        Another repository? Give Kurviq access on GitHub…
       </button>
+      <a className="scenes-link kq-left" href={NEW_REPO_URL} target="_blank" rel="noopener noreferrer">
+        Create a new repository on GitHub…
+      </a>
     </div>
   );
 };
@@ -229,7 +275,7 @@ export const KurviqLogo = () => (
 
 /** on the welcome screen (injected by ../../vite.config.mts), instead of upstream's storage warning */
 export const WelcomeHeading = () => {
-  const { user } = useConnection();
+  const { user, repo } = useConnection();
   return (
     <div className="kq-welcome">
       <p>
@@ -249,8 +295,10 @@ export const WelcomeHeading = () => {
         </a>
       </p>
       <p className="kq-welcome__storage">
-        {user
+        {user && repo
           ? "Your drawings are saved in this browser and synced with GitHub."
+          : user
+          ? "Your drawings are saved in this browser. Choose a repository in the Scenes sidebar to sync them."
           : "Your drawings are saved in this browser. Connect GitHub to keep them safe in your repository."}
       </p>
       <a
@@ -309,7 +357,7 @@ export const GitHubPanel = () => {
     return (
       <section className="kq-card">
         <div className="kq-card__title">
-          Connected as <strong>{user.login}</strong> — which repository should your scenes sync with?
+          Connected as <strong>{user.login}</strong>. One more step: which repository should your scenes sync with?
         </div>
         <div className="kq-muted">
           Scenes are stored as <code>scenes/&lt;name&gt;.excalidraw</code>. Everyone who picks the same repository

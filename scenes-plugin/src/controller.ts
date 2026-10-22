@@ -987,6 +987,11 @@ class ScenesController {
     if (name === this.meta.current) {
       return;
     }
+    // online without GitHub: there is nowhere else to look, a new scene right away
+    if (!this.exists(name) && this.state.sync.notConnected) {
+      await this.create(name);
+      return;
+    }
     try {
       await this.open(name);
     } catch (error: any) {

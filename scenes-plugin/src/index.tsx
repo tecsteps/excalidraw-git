@@ -98,7 +98,7 @@ const useAttachController = () => {
       connectLive();
       if (!IS_RENDERER) {
         if (IS_ONLINE) {
-          startOnline();
+          startOnline({ openScenes: () => api.toggleSidebar({ name: SCENES_SIDEBAR_NAME, force: true }) });
         }
         deck.attach(api);
         connectRouter();
