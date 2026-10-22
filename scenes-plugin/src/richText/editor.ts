@@ -32,6 +32,7 @@ import {
   plainToPos,
   posToPlain,
   richDocOf,
+  safeLink,
   setParagraphs,
   sliceDoc,
   splitParagraph,
@@ -650,7 +651,10 @@ export const createRichEditable = (
     const link = target.closest?.("[data-a]") as HTMLElement | null;
     if (link && mod(event as any)) {
       event.preventDefault();
-      ownerWindow.open(link.dataset.a, "_blank", "noopener");
+      const href = safeLink(link.dataset.a);
+      if (href) {
+        ownerWindow.open(href, "_blank", "noopener,noreferrer");
+      }
       return;
     }
     // a click on a checkbox ticks it

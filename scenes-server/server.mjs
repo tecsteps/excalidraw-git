@@ -9,7 +9,9 @@
  *   SCENES_GIT_BRANCH    branch to use (default: main)
  *   SCENES_SERVER_PORT   port to listen on (default: 3101)
  *   SCENES_REPO_DIR      local checkout dir (default: scenes-server/.repo)
- *   SCENES_ALLOWED_ORIGIN  CORS origin (default: *)
+ *   SCENES_ALLOWED_ORIGIN  more browser origins allowed to use this server,
+ *                        comma-separated (always allowed: SCENES_APP_URL,
+ *                        localhost and 127.0.0.1 on the app's port)
  *   SCENES_APP_URL       the app's URL (default: http://localhost:3001)
  *
  * Stateless: scene data lives only on GitHub and in the browser
@@ -56,7 +58,10 @@ const REPO_URL = env.SCENES_GIT_REPO;
 const BRANCH = env.SCENES_GIT_BRANCH || "main";
 const PORT = Number(env.SCENES_SERVER_PORT || 3101);
 const REPO_DIR = path.resolve(ROOT, env.SCENES_REPO_DIR || "scenes-server/.repo");
-const ALLOWED_ORIGIN = env.SCENES_ALLOWED_ORIGIN || "*";
+const ALLOWED_ORIGINS_EXTRA = String(env.SCENES_ALLOWED_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter((origin) => origin && origin !== "*");
 const SCENES_SUBDIR = "scenes";
 const EXTENSION = ".excalidraw";
 const PULL_INTERVAL_MS = 5000;
@@ -285,6 +290,21 @@ const lastAgentVersion = async (name) => {
  * remove?: [name], move?: [from, to], result(blobs) }.
  * Offline: 503 — the browser keeps the change and retries later.
  */
+/** the path itself if it is a symlink (never what it points to) */
+const dropSymlink = async (target) => {
+  const info = await fs.lstat(target).catch(() => null);
+  if (info?.isSymbolicLink()) {
+    await fs.unlink(target);
+  }
+};
+
+/** scenes/ as a real directory of the checkout (not a symlink to elsewhere) */
+const realScenesDir = async () => {
+  const dir = path.join(REPO_DIR, SCENES_SUBDIR);
+  await dropSymlink(dir);
+  await fs.mkdir(dir, { recursive: true });
+};
+
 const commitToRemote = async (prepare) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (!(await fetchRemote())) {
@@ -300,7 +320,10 @@ const commitToRemote = async (prepare) => {
     const paths = [];
     for (const [name, content] of Object.entries(plan.write || {})) {
       const rel = scenePath(name);
-      await fs.mkdir(path.join(REPO_DIR, SCENES_SUBDIR), { recursive: true });
+      await realScenesDir();
+      // a symlink committed in place of the scene (by anyone with push access)
+      // must not redirect the write outside the checkout: replace the link itself
+      await dropSymlink(path.join(REPO_DIR, rel));
       await fs.writeFile(path.join(REPO_DIR, rel), content);
       await git(["add", "--", rel]);
       paths.push(rel);
@@ -600,6 +623,8 @@ const ensureRenderer = async ({ dedicated = false } = {}) => {
 
 /** what the printed page may do: nothing but show its inline content */
 const PDF_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'">`;
+/** how the app's export starts: the policy is in force before any content (not merely somewhere in the text) */
+const PDF_START = `<!doctype html>\n<html><head><meta charset="utf-8">\n${PDF_CSP}\n`;
 
 const printPdf = async (html) => {
   const chrome = CHROME_CANDIDATES.find((candidate) => existsSync(candidate));
@@ -623,6 +648,9 @@ const printPdf = async (html) => {
           "--no-default-browser-check",
           "--disable-gpu",
           "--no-pdf-header-footer",
+          // the page is only printed: no scripts, no network (on top of its CSP)
+          "--blink-settings=scriptEnabled=false",
+          "--host-resolver-rules=MAP * ~NOTFOUND",
           "--virtual-time-budget=15000",
           `--print-to-pdf=${out}`,
           `file://${page}`,
@@ -731,10 +759,29 @@ const readBody = (req) =>
     req.on("error", reject);
   });
 
+/** browser origins allowed to use this server: the app (any name it runs under locally) */
+const allowedOrigins = () => {
+  const port = env.VITE_APP_PORT || 3001;
+  return new Set([APP_URL, `http://localhost:${port}`, `http://127.0.0.1:${port}`, ...ALLOWED_ORIGINS_EXTRA]);
+};
+
+/** host names this server answers to (anything else: DNS rebinding) */
+const allowedHosts = () => {
+  const hosts = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
+  try {
+    hosts.add(new URL(env.SCENES_SERVER_URL || "").host);
+  } catch {}
+  return hosts;
+};
+
+/** the CORS origin to answer with: the request's own, if allowed */
+const corsOrigin = (res) => res.kqCorsOrigin || "null";
+
 const send = (res, status, body, type = "application/json") => {
   res.writeHead(status, {
     "Content-Type": type,
-    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Origin": corsOrigin(res),
+    Vary: "Origin",
     "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Scenes-Source, X-Scenes-Client, X-Base-Sha",
     "Access-Control-Expose-Headers": "X-Scene-Sha",
@@ -742,9 +789,38 @@ const send = (res, status, body, type = "application/json") => {
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 };
 
+/**
+ * Only the app and local tools (the MCP server, scripts: no Origin header)
+ * may use this server. Websites the user visits may not: they get no CORS
+ * approval, their requests are refused, and DNS rebinding fails the Host check.
+ */
+const refuse = (req) => {
+  if (!allowedHosts().has(String(req.headers.host || "").toLowerCase())) {
+    return "unknown host";
+  }
+  const origin = req.headers.origin;
+  if (origin !== undefined && !allowedOrigins().has(origin)) {
+    return "origin not allowed";
+  }
+  // a body is always JSON (a cross-site form or text/plain request can't be)
+  if (
+    (req.method === "POST" || req.method === "PUT") &&
+    Number(req.headers["content-length"] || 0) > 0 &&
+    !String(req.headers["content-type"] || "").startsWith("application/json")
+  ) {
+    return "send JSON";
+  }
+  return null;
+};
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(req.url, "http://localhost");
+  res.kqCorsOrigin = req.headers.origin && allowedOrigins().has(req.headers.origin) ? req.headers.origin : null;
   try {
+    const refused = refuse(req);
+    if (refused) {
+      return send(res, 403, { error: `Forbidden: ${refused}` });
+    }
     if (req.method === "OPTIONS") {
       return send(res, 204, "");
     }
@@ -753,7 +829,8 @@ const server = http.createServer(async (req, res) => {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
-        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        "Access-Control-Allow-Origin": corsOrigin(res),
+        Vary: "Origin",
       });
       res.write(": connected\n\n");
       const tabId = url.searchParams.get("tab") || `anon-${Date.now()}`;
@@ -813,14 +890,15 @@ const server = http.createServer(async (req, res) => {
       }
       const { html } = await readJson(req);
       // the page must forbid scripts and network (CSP set by the app's export)
-      if (typeof html !== "string" || !html.startsWith("<!doctype html>") || !html.includes(PDF_CSP)) {
+      if (typeof html !== "string" || !html.startsWith(PDF_START)) {
         return send(res, 400, { error: "Expected { html }" });
       }
       const pdf = await printPdf(html);
       res.writeHead(200, {
         "Content-Type": "application/pdf",
         "Content-Length": pdf.length,
-        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        "Access-Control-Allow-Origin": corsOrigin(res),
+        Vary: "Origin",
       });
       return res.end(pdf);
     }
@@ -836,14 +914,6 @@ const server = http.createServer(async (req, res) => {
       });
       return send(res, 200, { scenes, remote: remoteState });
     }
-    const renameMatch = url.pathname.match(/^\/api\/scenes\/(.+)\/rename$/);
-    if (renameMatch && req.method === "POST") {
-      const from = decodeURIComponent(renameMatch[1]);
-      const { to } = await readJson(req);
-      const result = await serialized(() => renameScene(from, String(to ?? "").trim()));
-      broadcast({ type: "scene-renamed", from, to, sha: result.sha, source: req.headers["x-scenes-source"] || "app" });
-      return send(res, 200, { from, to, ...result });
-    }
     // scenes are written only by the app and the MCP tools — never by
     // scripts calling this API directly (that bypasses merging, change
     // tracking and the user's unpushed work)
@@ -856,6 +926,14 @@ const server = http.createServer(async (req, res) => {
         error:
           "Direct writes to the scenes server are not allowed. Agents: change scenes only with the Excalidraw MCP tools (read_scene / edit_scene, save_scene for new scenes); the app syncs everything with GitHub. If you don't have these tools, your MCP server is outdated: ask the user to restart your session.",
       });
+    }
+    const renameMatch = url.pathname.match(/^\/api\/scenes\/(.+)\/rename$/);
+    if (renameMatch && req.method === "POST") {
+      const from = decodeURIComponent(renameMatch[1]);
+      const { to } = await readJson(req);
+      const result = await serialized(() => renameScene(from, String(to ?? "").trim()));
+      broadcast({ type: "scene-renamed", from, to, sha: result.sha, source: req.headers["x-scenes-source"] || "app" });
+      return send(res, 200, { from, to, ...result });
     }
     const agentMatch = url.pathname.match(/^\/api\/scenes\/(.+)\/agent-version$/);
     if (agentMatch && req.method === "GET") {

@@ -112,6 +112,9 @@ const requestToken = async (): Promise<string | null> => {
     return null;
   }
   token = { value: body.token, expiresAt: Date.parse(body.expiresAt) };
+  try {
+    localStorage.setItem(USED_KEY, "1");
+  } catch {}
   if (state.user?.login !== body.user?.login) {
     setConnection({ user: body.user, error: null });
   }
@@ -145,17 +148,47 @@ export const checkConnection = async () => {
   return state;
 };
 
-/** sign in with GitHub (full page redirect, back to this page afterwards) */
-export const connectGitHub = (mode: "login" | "install" = "login") => {
+/** set once this browser was connected: from then on "Connect GitHub" just signs in */
+const USED_KEY = "kurviq-github-used";
+/** this tab went to GitHub to connect (sessionStorage) */
+export const CONNECTING_KEY = "kurviq-connecting";
+
+/**
+ * Sign in with GitHub (full page redirect, back to this page afterwards).
+ * "install": the Kurviq app's installation (GitHub asks which repositories,
+ * once per account). By default a browser that was connected before only
+ * signs in: the installation exists, and GitHub would show its settings page
+ * again; if it is missing after all, the setup dialog sends the user there.
+ */
+export const connectGitHub = (mode?: "login" | "install") => {
+  let used = false;
+  try {
+    used = !!localStorage.getItem(USED_KEY) || !!localStorage.getItem(REPO_KEY);
+  } catch {}
   const back = window.location.pathname + window.location.search;
-  window.location.href = `/auth/${mode}?return=${encodeURIComponent(back)}`;
+  try {
+    // the answer (?github=connected) only counts in the tab that asked
+    sessionStorage.setItem(CONNECTING_KEY, String(Date.now()));
+  } catch {}
+  window.location.href = `/auth/${mode ?? (used ? "login" : "install")}?return=${encodeURIComponent(back)}`;
 };
 
-export const disconnectGitHub = async () => {
-  await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+/** the other tabs of this browser hear about a disconnect */
+const tabsChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("kurviq-github") : null;
+
+const forgetConnection = () => {
   token = null;
   forgetListings();
   setConnection({ user: null });
+};
+tabsChannel?.addEventListener("message", (event) => event.data === "disconnected" && forgetConnection());
+
+export const disconnectGitHub = async () => {
+  // under the token lock: a refresh running right now can't bring the session back afterwards
+  const logout = () => fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+  await (navigator.locks ? navigator.locks.request("kurviq-github-token", logout) : logout());
+  forgetConnection();
+  tabsChannel?.postMessage("disconnected");
 };
 
 export const chooseRepo = (repo: RepoChoice | null) => {
@@ -370,6 +403,10 @@ const lookUpRepo = async (owner: string, name: string): Promise<RepoChoice | nul
   return toRepo(res.data);
 };
 
+/** why a public kurviq-scenes is refused */
+export const notPrivate = (owner: string) =>
+  `${owner}/${SCENES_REPO} is public on GitHub, so Kurviq doesn't sync private scenes there. Make it private on GitHub (Settings → General → Danger Zone → Change visibility), then set up sync again`;
+
 /** the repository can't be used any more: stop syncing, say why (scenes stay in the browser) */
 const loseAccess = (reason: string): never => {
   forgetListings();
@@ -397,6 +434,10 @@ const checkAccess = async (now = false) => {
   }
   if (res.status !== 200) {
     fail(res, `Could not check ${repo.owner}/${repo.name}`);
+  }
+  if (!res.data.private) {
+    // everything synced there would be public: stop before the next push
+    loseAccess(notPrivate(repo.owner));
   }
   repoCheckedAt = Date.now();
   // (a protected branch shows only when a push is refused: found again then)
@@ -516,7 +557,8 @@ const fetchScenes = async (force = false) => {
     const main = await fetchListing(repo, force);
     if (publicRepo === undefined) {
       const found = await lookUpRepo(repo.owner, PUBLIC_REPO).catch(() => null);
-      publicRepo = found && !found.readOnly ? found : null;
+      // only a repository that really is public and writable counts as the public one
+      publicRepo = found && !found.readOnly && !found.private ? found : null;
     }
     const pub = publicRepo ? await fetchListing(publicRepo, force).catch(() => null) : null;
     remote.online = true;
@@ -586,6 +628,9 @@ const ensurePublicRepo = async (): Promise<RepoChoice> => {
   if (found?.readOnly) {
     throw httpError(403, `${repo.owner}/${PUBLIC_REPO}: ${found.readOnly}`);
   }
+  if (found?.private) {
+    throw httpError(409, `${repo.owner}/${PUBLIC_REPO} exists but is private: make it public on GitHub to use it for public scenes`);
+  }
   if (!found) {
     const created = await createRepo(repo.owner, PUBLIC_REPO, { private: false });
     if (created === "exists") {
@@ -600,7 +645,7 @@ const ensurePublicRepo = async (): Promise<RepoChoice> => {
   }
   for (let attempt = 0; attempt < 10; attempt++) {
     const ready = found ?? (await lookUpRepo(repo.owner, PUBLIC_REPO));
-    if (ready && !ready.readOnly) {
+    if (ready && !ready.readOnly && !ready.private) {
       publicRepo = ready;
       return ready;
     }
@@ -798,7 +843,7 @@ export const githubScenes = {
     if (from.isPublic === makePublic) {
       return { sha: from.sha };
     }
-    const target = makePublic ? await ensurePublicRepo() : requireRepo();
+    const target = makePublic ? await ensurePublicRepo() : await checkAccess(true);
     if ((await fetchListing(target, true)).blobs.has(name)) {
       throw httpError(409, `${target.owner}/${target.name} already has a scene named "${name}"`);
     }

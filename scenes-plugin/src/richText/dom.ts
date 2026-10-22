@@ -1,7 +1,7 @@
 // Reading formatted text back from HTML: the editor's own DOM (after the
 // browser typed into it), and HTML pasted from elsewhere (web pages, docs).
 
-import { MAX_DEPTH, normalizeDoc } from "./model";
+import { MAX_DEPTH, normalizeDoc, safeLink } from "./model";
 
 import type { Marks, Para, ParaKind, RichDoc } from "./model";
 
@@ -25,7 +25,7 @@ const marksFrom = (el: HTMLElement, marks: Marks, external: boolean): Marks => {
   if (tag === "I" || tag === "EM") next.i = true;
   if (tag === "U" || tag === "INS") next.u = true;
   if (tag === "S" || tag === "STRIKE" || tag === "DEL") next.s = true;
-  if (tag === "A" && el.getAttribute("href") && external) next.a = el.getAttribute("href")!;
+  if (tag === "A" && external && safeLink(el.getAttribute("href"))) next.a = safeLink(el.getAttribute("href"))!;
   if (external && HEADING_SIZES[tag]) {
     next.b = true;
     next.z = HEADING_SIZES[tag];

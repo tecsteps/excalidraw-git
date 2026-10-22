@@ -8,7 +8,7 @@
 
 import { applyDarkModeFilter, getFontFamilyString, getFontString } from "@excalidraw/common";
 
-import { markersOf, richDocOf } from "./model";
+import { markersOf, richDocOf, safeLink } from "./model";
 
 import type { Marks, Para, RichDoc, Run } from "./model";
 
@@ -70,12 +70,12 @@ export const paraAttrs = (para: Para, marker: string) => {
     style.push(`--rt-indent:${round((LIST_INDENT * ((para.d || 0) + 1)) / z0)}em`, "padding-left:var(--rt-indent)");
   }
   const attrs = [
-    para.k && ` data-k="${para.k}"`,
-    para.d && ` data-d="${para.d}"`,
+    para.k && ` data-k="${escapeHtml(String(para.k))}"`,
+    para.d && ` data-d="${Number(para.d) || 0}"`,
     para.x && ` data-x="1"`,
     marker && ` data-m="${escapeHtml(marker.trim())}"`,
   ].filter(Boolean);
-  return `class="rt-p"${attrs.join("")} style="${style.join(";")}"`;
+  return `class="rt-p"${attrs.join("")} style="${escapeHtml(style.join(";"))}"`;
 };
 
 export const docToHtml = (doc: RichDoc, dark = false) => {
@@ -84,7 +84,9 @@ export const docToHtml = (doc: RichDoc, dark = false) => {
     .map((para, index) => {
       const z0 = paraSize(para);
       const body = para.r.length
-        ? para.r.map((run) => `<span${runAttrs(run)} style="${runStyle(run, z0, dark)}">${escapeHtml(run.t)}</span>`).join("")
+        ? para.r
+            .map((run) => `<span${runAttrs(run)} style="${escapeHtml(runStyle(run, z0, dark))}">${escapeHtml(run.t)}</span>`)
+            .join("")
         : "<br>";
       return `<div ${paraAttrs(para, markers[index])}>${body}</div>`;
     })
@@ -531,9 +533,8 @@ export const svgRich = (element: TextElementLike, node: SVGElement, doc: Documen
   }
   for (const fragment of layout.fragments) {
     const color = applyDarkModeFilter(fragment.marks.c || (fragment.marks.a ? LINK_COLOR : element.strokeColor), dark);
-    const parent = fragment.marks.a
-      ? add(group, "a", { href: fragment.marks.a, target: "_blank" })
-      : group;
+    const href = safeLink(fragment.marks.a);
+    const parent = href ? add(group, "a", { href, target: "_blank", rel: "noopener noreferrer" }) : group;
     const text = add(parent, "text", {
       x: fragment.x,
       y: fragment.baseline,

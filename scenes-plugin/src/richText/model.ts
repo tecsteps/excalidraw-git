@@ -95,17 +95,47 @@ export const marksOf = (run: Marks): Marks => {
   return marks;
 };
 
+// Scenes come from anywhere (shared links, files, agents, the clipboard), so
+// formatting is checked value by value: it ends up in HTML and in links.
+
+/** a CSS color: #hex, rgb()/rgba() with numbers, or a color name */
+const COLOR_RE = /^(#[0-9a-f]{3,8}|rgba?\(\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*(,\s*[\d.]+%?\s*)?\)|[a-z]{3,30})$/i;
+
+/** links only to the web and to mail (no javascript:, data: …) */
+export const safeLink = (value: unknown): string | null => {
+  if (typeof value !== "string" || value.length > 2048) {
+    return null;
+  }
+  const link = value.trim();
+  return /^(https?:\/\/|mailto:)/i.test(link) && !/[\u0000-\u001f\s<>"]/.test(link) ? link : null;
+};
+
+const cleanMark = (key: MarkKey, value: unknown): unknown => {
+  switch (key) {
+    case "b":
+    case "i":
+    case "u":
+    case "s":
+      return value === true ? true : undefined;
+    case "c":
+    case "h":
+      return typeof value === "string" && COLOR_RE.test(value.trim()) ? value.trim() : undefined;
+    case "a":
+      return safeLink(value) ?? undefined;
+    case "z":
+      return typeof value === "number" && Number.isFinite(value) && value >= 0.1 && value <= 10 && Math.abs(value - 1) >= 0.001
+        ? value
+        : undefined;
+  }
+};
+
 const cleanMarks = (run: Run): Run => {
-  const next: Run = { t: run.t };
+  const next: Run = { t: typeof run.t === "string" ? run.t : "" };
   for (const key of MARK_KEYS) {
-    const value = run[key];
-    if (value === undefined || value === null || value === "" || (value as unknown) === false) {
-      continue;
+    const value = cleanMark(key, run[key]);
+    if (value !== undefined) {
+      (next as any)[key] = value;
     }
-    if (key === "z" && (typeof value !== "number" || !Number.isFinite(value) || Math.abs(value - 1) < 0.001)) {
-      continue;
-    }
-    (next as any)[key] = value;
   }
   return next;
 };
@@ -152,7 +182,24 @@ export const isPlainDoc = (doc: RichDoc) =>
   doc.p.every((para) => !para.k && para.r.every((run) => MARK_KEYS.every((key) => run[key] === undefined)));
 
 const isDoc = (value: any): value is RichDoc =>
-  !!value && value.v === 1 && Array.isArray(value.p) && value.p.every((para: any) => para && Array.isArray(para.r));
+  !!value &&
+  value.v === 1 &&
+  Array.isArray(value.p) &&
+  value.p.every(
+    (para: any) =>
+      para && typeof para === "object" && Array.isArray(para.r) && para.r.every((run: any) => run && typeof run.t === "string"),
+  );
+
+/** the checked, normalized version of a stored doc (stored docs are never used as they are) */
+const checked = new WeakMap<object, RichDoc>();
+const checkedDoc = (doc: RichDoc) => {
+  let clean = checked.get(doc);
+  if (!clean) {
+    clean = normalizeDoc(doc);
+    checked.set(doc, clean);
+  }
+  return clean;
+};
 
 /**
  * The formatting of a text element, if it still applies to its text
@@ -166,7 +213,8 @@ export const richDocOf = (
   if (!isDoc(doc) || typeof originalText !== "string") {
     return null;
   }
-  return plainOf(doc) === originalText ? doc : null;
+  const clean = checkedDoc(doc);
+  return plainOf(clean) === originalText ? clean : null;
 };
 
 // ---------------------------------------------------------------------------

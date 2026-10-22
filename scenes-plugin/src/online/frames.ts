@@ -20,30 +20,61 @@ export const sendMessage = (ws: Sender, message: unknown) => {
   }
 };
 
-/** collects parts; returns the whole message once complete (else null) */
+/** a message in parts is at most this big (a scene with images, a PNG render) */
+const MAX_PARTS = 160; // 40 MB
+/** messages being assembled at the same time, per connection */
+const MAX_PENDING = 8;
+
+/**
+ * Collects parts; returns the whole message once complete (else null).
+ * Throws on anything malformed or too big: the caller drops the connection.
+ */
 export const createReceiver = () => {
   const partial = new Map<string, { parts: string[]; count: number; at: number }>();
   return (raw: string): any | null => {
+    if (raw.length > PART_SIZE + 1024) {
+      throw new Error("message too big");
+    }
     const message = JSON.parse(raw);
     if (message?.type !== "part") {
       return message;
     }
+    const { id, i, total, data } = message;
+    if (
+      typeof id !== "string" ||
+      id.length > 40 ||
+      !Number.isInteger(total) ||
+      total < 1 ||
+      total > MAX_PARTS ||
+      !Number.isInteger(i) ||
+      i < 0 ||
+      i >= total ||
+      typeof data !== "string"
+    ) {
+      throw new Error("malformed part");
+    }
     // drop leftovers of messages that never completed
-    for (const [id, entry] of partial) {
+    for (const [key, entry] of partial) {
       if (Date.now() - entry.at > 120_000) {
-        partial.delete(id);
+        partial.delete(key);
       }
     }
-    const entry = partial.get(message.id) ?? { parts: new Array(message.total), count: 0, at: Date.now() };
-    if (entry.parts[message.i] === undefined) {
-      entry.parts[message.i] = message.data;
+    if (!partial.has(id) && partial.size >= MAX_PENDING) {
+      throw new Error("too many unfinished messages");
+    }
+    const entry = partial.get(id) ?? { parts: new Array(total), count: 0, at: Date.now() };
+    if (entry.parts.length !== total) {
+      throw new Error("malformed part");
+    }
+    if (entry.parts[i] === undefined) {
+      entry.parts[i] = data;
       entry.count++;
     }
-    partial.set(message.id, entry);
-    if (entry.count < message.total) {
+    partial.set(id, entry);
+    if (entry.count < total) {
       return null;
     }
-    partial.delete(message.id);
+    partial.delete(id);
     return JSON.parse(entry.parts.join(""));
   };
 };

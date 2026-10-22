@@ -22,7 +22,16 @@ type TabState = {
 
 type Attachment = { tab: string; connectedAt: number; state: TabState };
 
-type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
+/** connected tabs per agent link (one person, a few tabs and devices) */
+const MAX_TABS = 20;
+
+type Pending = {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  /** the tab the command was sent to */
+  ws: WebSocket;
+};
 
 const COMMAND_TIMEOUT_MS = 30_000;
 
@@ -94,7 +103,7 @@ export class Pairing extends DurableObject {
         this.pending.delete(id);
         reject(httpError(504, "The Kurviq tab did not answer in time (is it in the background on a phone, or busy?)"));
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, ws });
       sendMessage(ws, { type: "command", id, command });
     });
   }
@@ -115,13 +124,17 @@ export class Pairing extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const appUrl = request.headers.get("X-Kurviq-App");
+    // the app's address comes from the Worker's MCP side only, never from a tab's connection
+    const appUrl = url.pathname === "/live" ? null : request.headers.get("X-Kurviq-App");
     if (appUrl) {
       this.appUrl = appUrl;
     }
     if (url.pathname === "/live") {
       if (request.headers.get("Upgrade") !== "websocket") {
         return new Response("Expected a WebSocket", { status: 426 });
+      }
+      if (this.tabs().length >= MAX_TABS) {
+        return new Response("Too many open Kurviq tabs for this agent link", { status: 429 });
       }
       const pair = new WebSocketPair();
       const tab = (url.searchParams.get("tab") || crypto.randomUUID()).slice(0, 40);
@@ -220,6 +233,11 @@ export class Pairing extends DurableObject {
     try {
       message = receive(raw);
     } catch {
+      // malformed or oversized: not a Kurviq tab
+      this.receivers.delete(ws);
+      try {
+        ws.close(1008, "invalid message");
+      } catch {}
       return;
     }
     if (!message) {
@@ -230,7 +248,8 @@ export class Pairing extends DurableObject {
       ws.serializeAttachment({ ...info, state: { ...(message.state || {}) } } satisfies Attachment);
     } else if (message.type === "result") {
       const entry = this.pending.get(String(message.id));
-      if (!entry) {
+      // only the tab the command went to may answer it
+      if (!entry || entry.ws !== ws) {
         return;
       }
       this.pending.delete(String(message.id));

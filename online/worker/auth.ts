@@ -157,9 +157,22 @@ const sessionCookie = async (request: Request, env: AuthEnv, session: Session) =
 // routes
 // -----------------------------------------------------------------------------
 
-/** only paths on this site (no open redirects) */
-const safeReturn = (value: string | null) =>
-  value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\") ? value : "/";
+/**
+ * Only paths on this site (no open redirects): parsed like a browser would
+ * (which drops tabs and newlines and reads "\\" as "/"), and kept only if it
+ * stays on this origin.
+ */
+const safeReturn = (value: string | null, origin: string) => {
+  if (!value || !value.startsWith("/") || /[\u0000-\u001f\\]/.test(value)) {
+    return "/";
+  }
+  try {
+    const target = new URL(value, origin);
+    return target.origin === origin ? `${target.pathname}${target.search}${target.hash}` : "/";
+  } catch {
+    return "/";
+  }
+};
 
 const withParam = (path: string, key: string, value: string) =>
   `${path}${path.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
@@ -182,7 +195,7 @@ const sameOrigin = (request: Request) => request.headers.get("Origin") === new U
 const startFlow = async (request: Request, env: AuthEnv, target: (state: string, origin: string) => string) => {
   const url = new URL(request.url);
   const state = b64url(crypto.getRandomValues(new Uint8Array(18)));
-  const sealed = await seal(env, { state, back: safeReturn(url.searchParams.get("return")) }, STATE_COOKIE);
+  const sealed = await seal(env, { state, back: safeReturn(url.searchParams.get("return"), url.origin) }, STATE_COOKIE);
   return redirect(target(state, url.origin), [cookie(request, STATE_COOKIE, sealed, 900)]);
 };
 

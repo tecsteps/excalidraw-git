@@ -11,6 +11,7 @@ import { scenesController } from "../controller";
 import { SPACE_KEY, currentSpace, spaceSuffix } from "../storage";
 
 import {
+  CONNECTING_KEY,
   SCENES_REPO,
   checkConnection,
   chooseRepo,
@@ -22,6 +23,7 @@ import {
   isInstalledFor,
   listSpaces,
   newRepoUrl,
+  notPrivate,
   storeRepoForSpace,
 } from "./github";
 import { pairing } from "./pairing";
@@ -168,6 +170,11 @@ export const setUpSync = async (owner?: string, path?: string) => {
         return;
       }
     }
+    if (!repo.private) {
+      // private scenes never go to a public repository
+      setSetup({ step: "error", owner, message: notPrivate(owner) });
+      return;
+    }
     if (spaceIdOf(owner) !== currentSpace) {
       await enterSpace(owner, repo, path);
       return;
@@ -205,8 +212,14 @@ export const startOnline = () => {
     window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }
 
-  // back from GitHub without sync yet: set it up right away
-  let showSetup = answer === "connected";
+  // back from GitHub without sync yet: set it up right away (only if this
+  // tab went there to connect: a link with ?github=connected does nothing)
+  let asked = false;
+  try {
+    asked = Date.now() - Number(sessionStorage.getItem(CONNECTING_KEY) || 0) < 30 * 60_000;
+    sessionStorage.removeItem(CONNECTING_KEY);
+  } catch {}
+  let showSetup = answer === "connected" && asked;
   let last = "";
   connection.subscribe(() => {
     const { user, repo } = connection.getState();
@@ -241,7 +254,7 @@ export const ConnectGitHubOffer = () => {
   return (
     <div className="kq-switcher-github">
       <span className="kq-muted">Scenes are saved in this browser only.</span>
-      <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
+      <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub()}>
         <span className="kq-icon">{GithubIcon}</span> Connect GitHub
       </button>
     </div>
@@ -331,7 +344,7 @@ export const WelcomeConnectGitHub = () => {
     return null;
   }
   return (
-    <WelcomeScreen.Center.MenuItem onSelect={() => connectGitHub("install")} icon={GithubIcon} shortcut={null}>
+    <WelcomeScreen.Center.MenuItem onSelect={() => connectGitHub()} icon={GithubIcon} shortcut={null}>
       Connect GitHub to sync
     </WelcomeScreen.Center.MenuItem>
   );
@@ -355,7 +368,7 @@ export const GitHubPanel = () => {
         </div>
         {error && <div className="scenes-error">{error}</div>}
         <div className="scenes-row">
-          <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub("install")}>
+          <button type="button" className="scenes-btn scenes-btn--primary" onClick={() => connectGitHub()}>
             <span className="kq-icon">{GithubIcon}</span> Connect GitHub
           </button>
         </div>

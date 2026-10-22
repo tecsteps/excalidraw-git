@@ -5,6 +5,7 @@
 // its env dir relative to cwd), e.g.:
 //   cd excalidraw/excalidraw-app && npx vite --config ../../scenes-plugin/vite.config.mts
 
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -498,6 +499,15 @@ const kurviqOnline = () => ({
         // Excalidraw+ promotions
         ["              renderCustomUI: excalidrawAPI\n", "              renderCustomUI: false\n"],
         [": [ExcalidrawPlusCommand, ExcalidrawPlusAppCommand]),", ": []),"],
+        // no scenes from links: #url= (any website's JSON), #json= and ?id=
+        // (excalidraw.com's backend) would load foreign content into the
+        // editor; Kurviq's own links are /@owner/scene (read-only viewer)
+        ['const id = searchParams.get("id");', "const id = null as string | null;"],
+        [
+          "const jsonBackendMatch = window.location.hash.match(\n    /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,\n  );",
+          "const jsonBackendMatch = null as RegExpMatchArray | null;",
+        ],
+        ["const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);", "const externalUrlMatch = null as RegExpMatchArray | null;"],
       ]);
     }
     if (file.endsWith("/excalidraw-app/components/AppWelcomeScreen.tsx")) {
@@ -617,8 +627,57 @@ const kurviqOnline = () => ({
         }
       }
     }
+    // security headers for every page and asset (Cloudflare applies _headers
+    // to what the Worker serves from ASSETS)
+    writeFileSync(path.join(out, "_headers"), securityHeaders(readFileSync(path.join(out, "index.html"), "utf8")));
   },
 });
+
+/**
+ * Content-Security-Policy for kurviq.com. Scripts only from this site (the
+ * page's few inline scripts by their hash), GitHub's API as the only other
+ * place to talk to, no plugins, no framing. Scene content can't run code even
+ * if something slipped through.
+ *   - wasm-unsafe-eval: font subsetting (harfbuzz / woff2 in WebAssembly)
+ *   - worker-src blob: data:  image resizing (pica) starts its workers so
+ *   - frame-src https:  embeds in scenes (YouTube, Figma …; Excalidraw
+ *     keeps its own allowlist of what may be embedded)
+ *   - esm.sh: Excalidraw's fallback for fonts it can't find on this site
+ */
+const securityHeaders = (html: string) => {
+  const hashes = [...html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)]
+    .filter(([, attrs]) => !/type="application\/(ld\+)?json"/.test(attrs))
+    .map(([, , body]) => `'sha256-${createHash("sha256").update(body).digest("base64")}'`);
+  const csp = [
+    "default-src 'self'",
+    `script-src 'self' 'wasm-unsafe-eval' ${hashes.join(" ")}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data: https://esm.sh",
+    "connect-src 'self' https://api.github.com https://libraries.excalidraw.com https://esm.sh",
+    "worker-src 'self' blob: data:",
+    "frame-src https:",
+    "media-src 'self' data: blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+  return `/*
+  Content-Security-Policy: ${csp}
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+/fonts/*
+  Access-Control-Allow-Origin: *
+
+/assets/*
+  Access-Control-Allow-Origin: *
+`;
+};
 
 /** upstream's PWA setup, with Kurviq's name and the Worker's routes left to the network */
 const kurviqPwa = () =>
@@ -627,26 +686,34 @@ const kurviqPwa = () =>
     workbox: {
       navigateFallbackDenylist: [/^\/auth\//, /^\/mcp(\/|$)/, /^\/live\//, /^\/llms\.txt$/, /^\/(imprint|privacy)(\.html)?$/, /\.txt$/],
       globIgnores: ["fonts.css", "**/locales/**", "service-worker.js", "**/*.chunk-*.js", "**/CodeMirrorEditor-*.js"],
+      // only this site's own files, matched by path (a pattern on the whole URL
+      // would also catch GitHub API requests that happen to contain "woff2");
+      // new cache names, so entries of the old, too broad rules are never served
       runtimeCaching: [
         {
-          urlPattern: new RegExp(".+.woff2"),
+          urlPattern: ({ url, sameOrigin }) => sameOrigin && url.pathname.endsWith(".woff2"),
           handler: "CacheFirst",
           options: {
-            cacheName: "fonts",
+            cacheName: "kurviq-fonts",
             expiration: { maxEntries: 1000, maxAgeSeconds: 60 * 60 * 24 * 90 },
-            cacheableResponse: { statuses: [0, 200] },
+            cacheableResponse: { statuses: [200] },
           },
         },
-        { urlPattern: new RegExp("fonts.css"), handler: "StaleWhileRevalidate", options: { cacheName: "fonts", expiration: { maxEntries: 50 } } },
         {
-          urlPattern: new RegExp("locales/[^/]+.js"),
-          handler: "CacheFirst",
-          options: { cacheName: "locales", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 } },
+          urlPattern: ({ url, sameOrigin }) => sameOrigin && url.pathname.endsWith("/fonts.css"),
+          handler: "StaleWhileRevalidate",
+          options: { cacheName: "kurviq-fonts", expiration: { maxEntries: 50 } },
         },
         {
-          urlPattern: new RegExp("(.chunk-.+|CodeMirrorEditor-.+)\\.js"),
+          urlPattern: ({ url, sameOrigin }) => sameOrigin && /\/locales\/[^/]+\.js$/.test(url.pathname),
           handler: "CacheFirst",
-          options: { cacheName: "chunk", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 90 } },
+          options: { cacheName: "kurviq-locales", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 30 } },
+        },
+        {
+          urlPattern: ({ url, sameOrigin }) =>
+            sameOrigin && url.pathname.startsWith("/assets/") && /(\.chunk-[^/]+|CodeMirrorEditor-[^/]+)\.js$/.test(url.pathname),
+          handler: "CacheFirst",
+          options: { cacheName: "kurviq-chunk", expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 90 } },
         },
       ],
       maximumFileSizeToCacheInBytes: 2.3 * 1024 ** 2,

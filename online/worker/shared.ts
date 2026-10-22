@@ -42,6 +42,9 @@ const publicScene = async (origin: string, owner: string, name: string, ctx: Exe
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Cache-Control": "public, max-age=60, stale-while-revalidate=600",
+          // someone else's content: data only, never a page
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "default-src 'none'; sandbox",
           "X-Kurviq-Source": `github.com/${owner}/${PUBLIC_REPO}`,
         },
       })
@@ -60,7 +63,8 @@ export const handlePublicApi = (request: Request, ctx: ExecutionContext): Promis
   if (!match) {
     return null;
   }
-  const scene = parse(decodeURIComponent(match[1]), match[2]);
+  // (the owner needs no decoding: GitHub names are letters, digits and dashes)
+  const scene = parse(match[1], match[2]);
   if (!scene || request.method !== "GET") {
     return Promise.resolve(new Response("Not found", { status: 404 }));
   }

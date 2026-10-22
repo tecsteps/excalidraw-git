@@ -1,6 +1,8 @@
 // The formatting toolbar above the text being edited.
 
 import type { RichEditorApi } from "./editor";
+import { safeLink } from "./model";
+
 import type { ParaKind } from "./model";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -163,7 +165,8 @@ export const createToolbar = (
           }
           closePopover();
           api.restoreFocus();
-          api.setLink(url || undefined);
+          // only web and mail links (javascript: and the like are dropped)
+          api.setLink(safeLink(url) ?? undefined);
         });
         input.addEventListener("keydown", (event) => {
           event.stopPropagation();

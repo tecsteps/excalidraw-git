@@ -52,19 +52,55 @@ const withCors = (response: Response) => {
   return next;
 };
 
+/** tools that work without the user's tab (everything else runs there) */
+const WITHOUT_TAB = new Set(["read_me"]);
+
+/** JSON-RPC tool calls in a request (single or batch), if any */
+const toolCalls = async (request: Request): Promise<Array<{ id: unknown; name: string }>> => {
+  if (request.method !== "POST") {
+    return [];
+  }
+  try {
+    const body = await request.clone().json();
+    return (Array.isArray(body) ? body : [body])
+      .filter((message) => message?.method === "tools/call")
+      .map((message) => ({ id: message.id, name: String(message.params?.name ?? "") }));
+  } catch {
+    return [];
+  }
+};
+
 const handleMcp = async (request: Request, env: Env, key: string) => {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS });
   }
   const app = new URL(request.url).origin;
   const stub = await pairingStub(env, key);
+  const unreachable = `Kurviq could not reach the user's browser. Ask the user to open ${app} (in the browser this agent link was made in).`;
+  // no tab behind this link: nothing runs (and nothing is fetched on its behalf)
+  const calls = (await toolCalls(request)).filter((call) => !WITHOUT_TAB.has(call.name));
+  if (calls.length) {
+    const state = (await (await stub.fetch(new Request("https://pairing/api/app/state"))).json()) as { connected?: boolean };
+    if (!state.connected) {
+      const answers = calls.map((call) => ({
+        jsonrpc: "2.0",
+        id: call.id,
+        result: { content: [{ type: "text", text: unreachable }], isError: true },
+      }));
+      return withCors(
+        new Response(JSON.stringify(answers.length === 1 ? answers[0] : answers), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+  }
   const server = createScenesMcp({
     name: "Kurviq",
     mode: "detached",
     appHint: app,
     githubOptional: true,
     skill: kurviqSkill(app),
-    unreachable: `Kurviq could not reach the user's browser. Ask the user to open ${app} (in the browser this agent link was made in).`,
+    unreachable,
     serverFetch: (pathname: string, init: RequestInit = {}) => {
       const headers = new Headers(init.headers);
       headers.set("X-Kurviq-App", app);
@@ -103,7 +139,8 @@ export default {
       if (!KEY_RE.test(live[1])) {
         return new Response("Unknown agent link", { status: 404 });
       }
-      if (request.headers.get("Origin") && request.headers.get("Origin") !== url.origin) {
+      // only Kurviq's own pages (browsers always send Origin with a WebSocket)
+      if (request.headers.get("Origin") !== url.origin) {
         return new Response("Forbidden", { status: 403 });
       }
       const stub = await pairingStub(env, live[1]);

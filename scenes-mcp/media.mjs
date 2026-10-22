@@ -23,13 +23,38 @@ const ICON_SETS = {
   "simple-icons": (name) => `https://cdn.jsdelivr.net/npm/simple-icons/icons/${name}.svg`,
 };
 
+/** remote images per call, and how long one may take */
+const MAX_REMOTE = 20;
+const FETCH_TIMEOUT_MS = 15_000;
+
+/** download with a deadline and a byte limit (stops reading at the limit) */
 const fetchBytes = async (url) => {
-  const res = await fetch(url, { redirect: "follow" });
+  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) {
     throw new Error(`${url}: HTTP ${res.status}`);
   }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  return { bytes, mimeType: res.headers.get("content-type")?.split(";")[0] || null };
+  if (!/^https?:$/.test(new URL(res.url || url).protocol)) {
+    throw new Error(`${url}: redirected to a non-web address`);
+  }
+  if (Number(res.headers.get("content-length")) > MAX_BYTES) {
+    throw new Error(`${url}: larger than ${MAX_BYTES / 1024 / 1024} MB`);
+  }
+  const chunks = [];
+  let size = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    size += value.byteLength;
+    if (size > MAX_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`${url}: larger than ${MAX_BYTES / 1024 / 1024} MB`);
+    }
+    chunks.push(value);
+  }
+  return { bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))), mimeType: res.headers.get("content-type")?.split(";")[0] || null };
 };
 
 /** intrinsic size of PNG / GIF / JPEG / WebP / SVG, or null */
@@ -171,6 +196,10 @@ export const resolveImages = async (elements) => {
   const files = {};
   const out = [];
   const wanted = (el) => el?.type === "image" && !el.fileId && (el.src || el.svg || el.icon);
+  const remote = elements.filter((el) => wanted(el) && (el.icon || /^https?:\/\//.test(String(el.src || "")))).length;
+  if (remote > MAX_REMOTE) {
+    throw new Error(`${remote} images from the web in one call: at most ${MAX_REMOTE} (nothing was saved)`);
+  }
   // load all sources first, so every unknown icon is reported at once
   const loaded = await Promise.all(
     elements.map((el) => (wanted(el) ? loadSource(el).catch((error) => ({ error, el })) : null)),

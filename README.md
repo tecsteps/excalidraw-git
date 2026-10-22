@@ -441,6 +441,30 @@ If upstream changes `excalidraw-app/App.tsx` so the injection anchors
 a clear `[excalidraw-scenes]` error; adjust `scenes-plugin/vite.config.mts`.
 `npm run typecheck` checks the plugin against the current upstream types.
 
+## Security
+
+- **Scene content is data, never code:** formatting from scenes (shared
+  links, files, agents, the clipboard) is checked value by value (colors,
+  sizes, list kinds; links only `http(s)` and `mailto`) before it reaches
+  the page.
+- **kurviq.com** sends a strict Content-Security-Policy (scripts only from
+  the site itself, the page's inline scripts by hash; GitHub's API as the
+  only other connection; no framing), generated into `_headers` by the
+  build. Excalidraw's `#url=` / `#json=` / `?id=` scene loaders are off.
+- **Sign-in:** the return address after GitHub is parsed and must stay on
+  the site; the refresh token never reaches the page; disconnecting takes
+  the token lock and signs out the browser's other tabs.
+- **Agent links:** tools run only while a Kurviq tab is connected to the
+  link; only Kurviq's pages may connect as a tab; answers are accepted only
+  from the tab a command went to; downloads (images) have a size and time
+  limit.
+- **Local scenes server:** answers only `localhost` / `127.0.0.1` (and the
+  host of `SCENES_SERVER_URL`), accepts browser requests only from the app
+  (`SCENES_APP_URL`, localhost on the app's port, plus any origins in
+  `SCENES_ALLOWED_ORIGIN`, comma-separated) and only JSON bodies; local tools
+  without an Origin (the MCP server) work as before. PDF pages must start
+  with their no-scripts policy and print with scripts and network off.
+
 ## License
 
 Kurviq is MIT licensed, see [LICENSE](LICENSE).
