@@ -510,6 +510,14 @@ const kurviqOnline = () => ({
         [/^/, `import { WelcomeConnectGitHub, WelcomeHeading } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
       ]);
     }
+    // bottom right: Kurviq's legal links instead of the shield, whose tooltip
+    // is about excalidraw.com's end-to-end encrypted collaboration
+    if (file.endsWith("/excalidraw-app/components/AppFooter.tsx")) {
+      return patch("AppFooter.tsx", [
+        ["{!isExcalidrawPlusSignedUser && <EncryptedIcon />}", "<KurviqLegalLinks />"],
+        [/^/, `import { KurviqLegalLinks } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
+      ]);
+    }
     if (file.endsWith("/excalidraw-app/components/AppMainMenu.tsx")) {
       return patch("AppMainMenu.tsx", [
         [/<MainMenu\.ItemLink\s+icon=\{ExcalLogo\}[\s\S]*?<\/MainMenu\.ItemLink>/, ""],

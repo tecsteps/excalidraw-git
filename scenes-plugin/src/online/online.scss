@@ -221,3 +221,20 @@
     }
   }
 }
+
+.excalidraw .kq-legal {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  pointer-events: var(--ui-pointerEvents, all);
+
+  a {
+    color: var(--color-gray-50);
+    text-decoration: none;
+
+    &:hover {
+      color: var(--color-gray-70, var(--text-primary-color));
+      text-decoration: underline;
+    }
+  }
+}

@@ -9,10 +9,13 @@ import { scenesController } from "./controller";
 import { deck } from "./deck";
 import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { presenter } from "./present";
+import { slideSorter } from "./slideSorter";
 import {
   addSlide,
   applyTheme,
   createTemplate,
+  deleteSlides,
+  duplicateSlides,
   getTemplate,
   getTheme,
   patchSlideData,
@@ -232,6 +235,29 @@ const SlideList = () => {
             "slides-card--drag": dragId === slide.id,
           })}
         >
+          <span className="slides-card__actions">
+            <button
+              type="button"
+              title="Duplicate this slide"
+              aria-label={`Duplicate slide ${slide.index + 1}`}
+              onClick={() => {
+                const [copy] = duplicateSlides(api(), [slide.id]);
+                if (copy) {
+                  setTimeout(() => focusFrame(copy), 50);
+                }
+              }}
+            >
+              ⧉
+            </button>
+            <button
+              type="button"
+              title="Delete this slide (undo with ⌘Z)"
+              aria-label={`Delete slide ${slide.index + 1}`}
+              onClick={() => window.confirm(`Delete slide ${slide.index + 1} “${slide.title}” with everything on it?`) && deleteSlides(api(), [slide.id])}
+            >
+              ×
+            </button>
+          </span>
           <button type="button" className="slides-card__open" onClick={() => focusFrame(slide.id)} title="Show this slide">
             <span className="slides-card__num">{slide.index + 1}</span>
             <span className="slides-card__thumb">{thumbs[slide.id] ? <img src={thumbs[slide.id]} alt="" /> : null}</span>
@@ -505,6 +531,15 @@ export const SlidesSidebar = () => {
           <button
             type="button"
             className="slides-btn"
+            disabled={slides.length < 1}
+            onClick={() => slideSorter.open()}
+            title="All slides as a grid: drag to reorder, duplicate, delete"
+          >
+            Sort
+          </button>
+          <button
+            type="button"
+            className="slides-btn"
             disabled={!slides.length}
             aria-pressed={pdfOpen}
             onClick={() => setPdfOpen(!pdfOpen)}
@@ -515,7 +550,7 @@ export const SlidesSidebar = () => {
         {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
         {!slides.length ? (
           <p className="slides-hint">
-            Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them.
+            Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them, or open “Sort” for all slides at once.
           </p>
         ) : (
           <SlideList />

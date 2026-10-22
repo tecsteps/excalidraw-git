@@ -22,7 +22,7 @@ import {
   newElementWith,
   restoreElements,
 } from "@excalidraw/excalidraw";
-import { measureText, syncInvalidIndices } from "@excalidraw/element";
+import { duplicateElements, measureText, syncInvalidIndices } from "@excalidraw/element";
 import { getFontString } from "@excalidraw/common";
 
 import type {
@@ -603,6 +603,90 @@ const newFrame = (props: { x: number; y: number; width: number; height: number; 
     index: null,
     customData: {},
   }) as any;
+
+/** the next spot to the right of `anchor` (same row) where a slide of this size overlaps no frame */
+const freeSpot = (elements: readonly ExcalidrawElement[], anchor: Frame | undefined, width: number, height: number) => {
+  let x = anchor ? anchor.x + anchor.width + SLIDE_GAP : 0;
+  const y = anchor ? anchor.y : 0;
+  while (elements.some((el) => isFrame(el) && el.x < x + width && el.x + el.width > x && el.y < y + height && el.y + el.height > y)) {
+    x += width + SLIDE_GAP;
+  }
+  return { x, y };
+};
+
+/** the elements with `order` set to their position in `ids` */
+const withOrder = (elements: readonly ExcalidrawElement[], ids: string[]) =>
+  elements.map((el) => {
+    const order = ids.indexOf(el.id);
+    return order >= 0 ? withSlideData(el, { order }) : el;
+  });
+
+/** move slides (in their current relative order) so the first of them lands at `index` of the remaining deck */
+export const moveSlides = (api: ExcalidrawImperativeAPI, ids: string[], index: number) => {
+  const slides = getSlides(api.getSceneElementsIncludingDeleted()).map((s) => s.id);
+  const moving = slides.filter((id) => ids.includes(id));
+  const rest = slides.filter((id) => !ids.includes(id));
+  rest.splice(Math.max(0, Math.min(index, rest.length)), 0, ...moving);
+  setSlideOrder(api, rest);
+};
+
+/**
+ * Duplicate slides: each copy (frame + its elements, click steps and notes
+ * included) goes right after its original in the deck, and next to it on the
+ * canvas. Template copies are not duplicated — the template sync puts fresh
+ * ones on the new slide. Returns the new slides' ids.
+ */
+export const duplicateSlides = (api: ExcalidrawImperativeAPI, ids: string[]) => {
+  let elements: ExcalidrawElement[] = [...api.getSceneElementsIncludingDeleted()];
+  const order = getSlides(elements).map((s) => s.id);
+  const created: string[] = [];
+  for (const id of order.filter((slideId) => ids.includes(slideId))) {
+    const frame = elements.find((el) => el.id === id && isFrame(el)) as Frame | undefined;
+    if (!frame) {
+      continue;
+    }
+    const own = elements.filter((el) => !el.isDeleted && el.frameId === id && !slideData(el).copyOf);
+    const { duplicatedElements, origIdToDuplicateId } = duplicateElements({
+      type: "everything",
+      elements: [frame, ...own],
+      randomizeSeed: true,
+    });
+    const spot = freeSpot(elements, frame, frame.width, frame.height);
+    const [dx, dy] = [spot.x - frame.x, spot.y - frame.y];
+    const copyId = origIdToDuplicateId.get(id)!;
+    const copies = duplicatedElements.map((el) => {
+      const moved = newElementWith(el as any, { x: el.x + dx, y: el.y + dy } as any) as ExcalidrawElement;
+      return el.id === copyId
+        ? newElementWith(moved as any, { name: frame.name ? `${frame.name} copy` : null } as any)
+        : moved;
+    });
+    elements = [...elements, ...copies];
+    order.splice(order.indexOf(id) + 1, 0, copyId);
+    created.push(copyId);
+  }
+  elements = withOrder(elements, order);
+  syncInvalidIndices(elements as any);
+  update(api, elements as any);
+  return created;
+};
+
+/** delete slides with everything on them (undo brings them back) */
+export const deleteSlides = (api: ExcalidrawImperativeAPI, ids: string[]) => {
+  const elements = api.getSceneElementsIncludingDeleted();
+  const gone = new Set(ids);
+  const remaining = getSlides(elements).map((s) => s.id).filter((id) => !gone.has(id));
+  update(
+    api,
+    withOrder(
+      elements.map((el) =>
+        !el.isDeleted && (gone.has(el.id) || (el.frameId && gone.has(el.frameId)))
+          ? newElementWith(el as any, { isDeleted: true } as any)
+          : el,
+      ),
+      remaining,
+    ),
+  );
+};
 
 /** a new 16:9 slide after the last one (or after `after`) */
 export const addSlide = (api: ExcalidrawImperativeAPI, after?: string) => {

@@ -19,6 +19,7 @@ import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
 import { PresentationOverlay } from "./present";
+import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
 import { connection } from "./online/github";
 import { ConnectGitHubOffer, GitHubPanel, KurviqFooter, McpButton, startOnline } from "./online/ui";
@@ -1028,6 +1029,7 @@ export const ScenesSidebar = () => {
     </Sidebar>
     <SlidesSidebar />
     <PresentationOverlay />
+    <SlideSorterOverlay />
     </>
   );
 };

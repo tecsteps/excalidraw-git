@@ -212,7 +212,7 @@ export const WelcomeHeading = () => {
       <p className="kq-welcome__storage">
         {user
           ? "Your drawings are saved in this browser and synced with GitHub."
-          : "Your drawings are saved in this browser. Connect GitHub to keep them safe in a repository."}
+          : "Your drawings are saved in this browser. Connect GitHub to keep them safe in your repository."}
       </p>
       <a
         className="kq-welcome__signature"
@@ -450,6 +450,18 @@ export const McpButton = () => {
 // -----------------------------------------------------------------------------
 // footer
 // -----------------------------------------------------------------------------
+
+/** bottom right of the canvas (injected by ../../vite.config.mts) */
+export const KurviqLegalLinks = () => (
+  <span className="kq-legal">
+    <a href="/imprint" target="_blank" rel="noopener">
+      Imprint
+    </a>
+    <a href="/privacy" target="_blank" rel="noopener">
+      Privacy
+    </a>
+  </span>
+);
 
 export const KurviqFooter = () => (
   <footer className="kq-footer">
