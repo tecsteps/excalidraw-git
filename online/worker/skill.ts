@@ -27,7 +27,7 @@ keep the tab open, then try again.
 const TROUBLESHOOTING = (app: string) => `## Troubleshooting
 
 - "Kurviq is not open in the user's browser": ask the user to open ${app}
-  in the browser the agent link was made in (MCP button, top left).
+  in the browser where they allowed this agent.
 - "GitHub is not connected": the user can connect it in the Scenes sidebar;
   until then, work with local-only scenes.
 - Local file paths (edit files, image src) and PDF export are not available
@@ -82,7 +82,7 @@ const section = (text: string, heading: string) => {
   return [start, end < 0 ? text.length : end + 1] as const;
 };
 
-export const kurviqSkill = (app: string, uploadUrl = `${app}/mcp/<your key>/upload`) => {
+export const kurviqSkill = (app: string, uploadUrl = "<the upload address from the MCP server's instructions>") => {
   let text = String(localSkill).replace(/^---[\s\S]*?---\s*/, "");
   const intro = text.indexOf("## Golden rules");
   text = INTRO(app) + text.slice(intro);

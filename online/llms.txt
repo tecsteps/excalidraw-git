@@ -4,15 +4,15 @@
 
 ## Connect an agent (MCP)
 
-1. The user opens https://kurviq.com and clicks **MCP** (top left). Kurviq shows a personal link: `https://kurviq.com/mcp/<key>` (the key is made by that browser and belongs to it).
-2. Add it as a remote MCP server (Streamable HTTP, no authentication; the key in the URL is the credential):
-   - Claude Code: `claude mcp add --transport http kurviq https://kurviq.com/mcp/<key>`
-   - Codex (`~/.codex/config.toml`): `[mcp_servers.kurviq]` with `url = "https://kurviq.com/mcp/<key>"`
+1. Add `https://kurviq.com/mcp` as a remote MCP server (Streamable HTTP, OAuth sign-in):
+   - Claude Code: `claude mcp add --transport http kurviq https://kurviq.com/mcp`, then `/mcp` → kurviq → Authenticate
+   - Codex (`~/.codex/config.toml`): `[mcp_servers.kurviq]` with `url = "https://kurviq.com/mcp"`, then `codex mcp login kurviq`
    - Claude Desktop / claude.ai: Settings → Connectors → Add custom connector → the URL
-   - Cursor and others: `{"mcpServers": {"kurviq": {"url": "https://kurviq.com/mcp/<key>"}}}`
+   - Cursor and others: `{"mcpServers": {"kurviq": {"url": "https://kurviq.com/mcp"}}}`
+2. On first use the MCP client opens the user's browser: a Kurviq page asks the user to allow the agent. It must be the browser the user works in Kurviq with (the page reads that browser's agent access). The client keeps the tokens and renews them by itself.
 3. The tools work while Kurviq is open in that browser (any scene, any tab). If a tool answers "Kurviq is not open", ask the user to open https://kurviq.com and try again.
 
-The link gives access to the user's Kurviq while it is open: treat it like a password. The user can replace it (MCP → "Make a new link") or turn agent access off.
+The address holds no secret. The user signs out every agent at once in Kurviq (MCP → "Sign out all agents"). The old personal link `https://kurviq.com/mcp/<key>` only works while the user explicitly allows it in Kurviq.
 
 ## How to work with the user's drawings
 
@@ -40,7 +40,7 @@ The MCP server's instructions (sent on connect) explain everything in detail. In
 
 ## Limits of the online version
 
-- Local file paths (image `src`, edit files) don't work: Kurviq's MCP server runs on kurviq.com, not on the agent's machine. Images from your machine: upload them with `curl -s --data-binary @image.png https://kurviq.com/mcp/<key>/upload` (your MCP link + `/upload`; PNG, JPEG, GIF, WebP, SVG up to 10 MB), then add `{ "type": "image", "fileId": "<the answer's fileId>", "x": 0, "y": 0, "width": 800 }`. The image's bytes never pass through your context; it goes straight to the user's open Kurviq tab.
+- Local file paths (image `src`, edit files) don't work: Kurviq's MCP server runs on kurviq.com, not on the agent's machine. Images from your machine: upload them with `curl -s --data-binary @image.png <upload address>` (the upload address is in the MCP server's instructions and tool descriptions, valid for a week; PNG, JPEG, GIF, WebP, SVG up to 10 MB), then add `{ "type": "image", "fileId": "<the answer's fileId>", "x": 0, "y": 0, "width": 800 }`. The image's bytes never pass through your context; it goes straight to the user's open Kurviq tab.
 - `export_pdf` is not available through MCP; the user exports PDFs in Kurviq (Slides sidebar → PDF).
 - Want everything on your own machine (local Excalidraw, git CLI, headless rendering without an open tab)? Use the local install: https://github.com/tecsteps/kurviq
 

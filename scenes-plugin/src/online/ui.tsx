@@ -914,16 +914,16 @@ export const RepoSetupDialog = () => {
 // MCP: the agent link of this browser
 // -----------------------------------------------------------------------------
 
-const agentPrompt = (url: string) => `Connect to my Kurviq whiteboard as a remote MCP server (Streamable HTTP, no auth):
+const agentPrompt = (url: string) => `Connect to my Kurviq whiteboard as a remote MCP server (Streamable HTTP, sign-in with OAuth):
 
 ${url}
 
-- Claude Code: claude mcp add --transport http kurviq ${url}
-- Codex: add to ~/.codex/config.toml: [mcp_servers.kurviq] url = "${url}"
+- Claude Code: claude mcp add --transport http kurviq ${url} (then /mcp → kurviq → Authenticate)
+- Codex: add to ~/.codex/config.toml: [mcp_servers.kurviq] url = "${url}", then run: codex mcp login kurviq
 - Claude Desktop / claude.ai: Settings → Connectors → Add custom connector → this URL
 - Other clients: add a remote MCP server with this URL
 
-Then read ${window.location.origin}/llms.txt to learn how to work with my drawings. The tools work while my Kurviq tab is open. Keep this link private: it gives access to my Kurviq.`;
+On first use my browser opens a Kurviq page where I allow you. Then read ${window.location.origin}/llms.txt to learn how to work with my drawings. The tools work while my Kurviq tab is open.`;
 
 const CopyButton = ({ text, label }: { text: string; label: string }) => {
   const [copied, setCopied] = useState(false);
@@ -943,9 +943,31 @@ const CopyButton = ({ text, label }: { text: string; label: string }) => {
   );
 };
 
+/** the old link (key in the URL, no sign-in): off unless the user keeps it on */
+const LegacyLinkSetting = () => {
+  const on = useSyncExternalStore(pairing.subscribe, pairing.legacyLink);
+  const legacy = useSyncExternalStore(pairing.subscribe, pairing.legacyUrl);
+  return (
+    <details className="kq-small" open={on}>
+      <summary className="kq-muted">Old link without sign-in</summary>
+      <label className="kq-check">
+        <input type="checkbox" checked={on} onChange={(event) => pairing.setLegacyLink(event.target.checked)} />
+        Also answer agents that use the old link (key in the address)
+      </label>
+      <p className="kq-muted kq-small">
+        {on
+          ? "Anyone who has the old link can use your Kurviq while it is open, without asking you. Move your agents to the sign-in, then turn this off."
+          : "Off: agents with the old link are refused and told to sign in."}
+      </p>
+      {on && legacy && <CopyButton text={legacy} label="Copy old link" />}
+    </details>
+  );
+};
+
 const McpDialog = ({ onClose }: { onClose: () => void }) => {
-  const key = usePairingKey() ?? pairing.ensureKey();
-  const url = pairing.mcpUrl(key)!;
+  // the approval page reads this browser's key: made here if there is none yet
+  usePairingKey() ?? pairing.ensureKey();
+  const url = pairing.mcpUrl();
   const prompt = agentPrompt(url);
 
   useEffect(() => {
@@ -964,30 +986,33 @@ const McpDialog = ({ onClose }: { onClose: () => void }) => {
           </button>
         </div>
         <p className="kq-muted">
-          Give this prompt to your agent (Claude Code, Codex, Cursor, Claude…). It connects the agent to Kurviq in{" "}
-          <strong>this browser</strong>: it can read, draw and edit your scenes while a Kurviq tab is open here, and
-          its edits are merged with yours.
+          Give this prompt to your agent (Claude Code, Codex, Cursor, Claude…). On first use, the agent opens a Kurviq
+          page in your browser where you allow it. Then it can read, draw and edit your scenes while a Kurviq tab is
+          open in <strong>this browser</strong>, and its edits are merged with yours.
         </p>
         <textarea className="kq-prompt" readOnly value={prompt} rows={9} onFocus={(event) => event.target.select()} />
         <div className="scenes-row">
           <CopyButton text={prompt} label="Copy prompt" />
-          <CopyButton text={url} label="Copy MCP link only" />
+          <CopyButton text={url} label="Copy MCP address only" />
         </div>
         <p className="kq-muted kq-small">
-          Anyone with this link can use your Kurviq while it is open. Lost control of it?{" "}
+          The address holds no secret: an agent only gets in after you allowed it here, in this browser. Cut every agent
+          off:{" "}
           <button
             type="button"
             className="scenes-link"
-            onClick={() => window.confirm("Make a new link? Agents with the old link lose access.") && pairing.reset()}
+            onClick={() =>
+              window.confirm("Sign out every agent? Each one asks you to allow it again on its next use.") && pairing.reset()
+            }
           >
-            Make a new link
+            Sign out all agents
           </button>{" "}
           ·{" "}
           <button
             type="button"
             className="scenes-link scenes-link--danger"
             onClick={() => {
-              if (window.confirm("Turn agent access off? The link stops working.")) {
+              if (window.confirm("Turn agent access off in this browser? Every agent is signed out.")) {
                 pairing.remove();
                 onClose();
               }
@@ -996,6 +1021,7 @@ const McpDialog = ({ onClose }: { onClose: () => void }) => {
             Turn agent access off
           </button>
         </p>
+        <LegacyLinkSetting />
         <p className="kq-muted kq-small">
           How agents work with Kurviq:{" "}
           <a href="/llms.txt" target="_blank" rel="noopener">

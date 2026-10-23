@@ -18,7 +18,16 @@ type TabState = {
   visible?: boolean;
   focusedAt?: number;
   github?: boolean;
+  /** the user allows the old agent link (key in the URL, no sign-in) in this browser */
+  legacyLink?: boolean;
 };
+
+/**
+ * How the agent got here (set by the Worker, X-Kurviq-Via): "oauth" = signed
+ * in (the user allowed it in Kurviq), "link" = the old link with the key in
+ * the URL, answered only by tabs that still allow it
+ */
+type Via = "oauth" | "link";
 
 /** the commit this Worker is built from (online/build-worker.mjs) */
 declare const __KURVIQ_BUILD__: string;
@@ -49,6 +58,9 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 
 const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
+const legacyRefused = (app: string) =>
+  `This agent uses the old Kurviq link (the key in the URL), which the user has switched off. Connect with ${app}/mcp instead: the agent signs in once and the user allows it in Kurviq (e.g. claude mcp add --transport http kurviq ${app}/mcp). Ask the user to do this.`;
+
 export class Pairing extends DurableObject {
   private pending = new Map<string, Pending>();
   private receivers = new WeakMap<WebSocket, (raw: string) => any>();
@@ -65,19 +77,24 @@ export class Pairing extends DurableObject {
   // tabs
   // ---------------------------------------------------------------------------
 
-  private tabs() {
+  private allTabs() {
     return this.ctx.getWebSockets().flatMap((ws) => {
       const info = ws.deserializeAttachment() as Attachment | null;
       return info && ws.readyState === WebSocket.OPEN ? [{ ws, ...info }] : [];
     });
   }
 
+  /** the tabs that answer an agent that came this way */
+  private tabs(via: Via) {
+    return this.allTabs().filter((tab) => via === "oauth" || tab.state.legacyLink === true);
+  }
+
   /** the tab agents talk to: the visible, most recently focused one (or the one showing `scene`) */
-  private activeTab(scene?: string | null) {
+  private activeTab(via: Via, scene?: string | null) {
     const rank = (tab: Attachment) => [tab.state.visible ? 1 : 0, tab.state.focusedAt || 0, tab.connectedAt];
     const pick = (onlyScene?: string | null) => {
       let best: (Attachment & { ws: WebSocket }) | null = null;
-      for (const tab of this.tabs()) {
+      for (const tab of this.tabs(via)) {
         if (onlyScene !== undefined && (tab.state.current ?? null) !== onlyScene) {
           continue;
         }
@@ -96,6 +113,9 @@ export class Pairing extends DurableObject {
   }
 
   private notOpen() {
+    if (this.allTabs().length) {
+      return httpError(403, legacyRefused(this.appUrl));
+    }
     return httpError(
       409,
       `Kurviq is not open in the user's browser. The agent works through the user's open Kurviq tab: ask the user to open ${this.appUrl} (in the browser this agent link was made in) and keep the tab open.`,
@@ -122,11 +142,12 @@ export class Pairing extends DurableObject {
     });
   }
 
-  private appState() {
-    const tab = this.activeTab();
+  private appState(via: Via) {
+    const tab = this.activeTab(via);
     return {
       connected: !!tab,
-      tabs: this.tabs().length,
+      ...(!tab && this.allTabs().length ? { refused: legacyRefused(this.appUrl) } : {}),
+      tabs: this.tabs(via).length,
       activeTab: tab?.tab ?? null,
       ...(tab ? tab.state : { current: null, dirty: false }),
     };
@@ -147,7 +168,7 @@ export class Pairing extends DurableObject {
       if (request.headers.get("Upgrade") !== "websocket") {
         return new Response("Expected a WebSocket", { status: 426 });
       }
-      if (this.tabs().length >= MAX_TABS) {
+      if (this.allTabs().length >= MAX_TABS) {
         return new Response("Too many open Kurviq tabs for this agent link", { status: 429 });
       }
       const pair = new WebSocketPair();
@@ -164,15 +185,16 @@ export class Pairing extends DurableObject {
   }
 
   private async api(request: Request, url: URL): Promise<Response> {
+    const via: Via = request.headers.get("X-Kurviq-Via") === "oauth" ? "oauth" : "link";
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.text();
     if (url.pathname === "/api/app/state") {
-      return json(200, this.appState());
+      return json(200, this.appState(via));
     }
     if (url.pathname === "/api/app/command" && request.method === "POST") {
       const command = JSON.parse(body || "{}");
       // no headless Excalidraw here: the agent's own work runs in the user's tab too
       delete command.agentSide;
-      const tab = this.activeTab(command.targetScene);
+      const tab = this.activeTab(via, command.targetScene);
       if (!tab) {
         throw this.notOpen();
       }
@@ -180,8 +202,8 @@ export class Pairing extends DurableObject {
     }
     if (url.pathname === "/api/app/flush" && request.method === "POST") {
       const { name } = JSON.parse(body || "{}");
-      const showing = this.tabs().filter((tab) => tab.state.current === name);
-      const targets = showing.length ? showing : [this.activeTab()].filter((tab) => !!tab);
+      const showing = this.tabs(via).filter((tab) => tab.state.current === name);
+      const targets = showing.length ? showing : [this.activeTab(via)].filter((tab) => !!tab);
       const results = [];
       for (const tab of targets) {
         try {
@@ -199,7 +221,7 @@ export class Pairing extends DurableObject {
       });
     }
     if (url.pathname.startsWith("/api/scenes")) {
-      const tab = this.activeTab();
+      const tab = this.activeTab(via);
       if (!tab) {
         throw this.notOpen();
       }
@@ -223,7 +245,7 @@ export class Pairing extends DurableObject {
 
   /** tell the other tabs of this browser that GitHub changed (they sync) */
   private broadcast(event: unknown, except?: WebSocket) {
-    for (const tab of this.tabs()) {
+    for (const tab of this.allTabs()) {
       if (tab.ws !== except) {
         sendMessage(tab.ws, event);
       }

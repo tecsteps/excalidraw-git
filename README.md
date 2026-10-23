@@ -54,16 +54,21 @@ install:
   connection stays for months: Kurviq keeps GitHub's refresh token in an
   encrypted, httpOnly cookie of your browser; its server stores nothing.
   **Disconnect** any time in the sidebar.
-- **AI agents (MCP):** click **MCP** (top left). Kurviq shows a prompt with a
-  personal link `https://kurviq.com/mcp/<key>`; give it to your agent (Claude
-  Code, Codex, Cursor, Claude, …). The agent then works through your open
+- **AI agents (MCP):** click **MCP** (top left) for a prompt to give your
+  agent (Claude Code, Codex, Cursor, Claude, …): it adds
+  `https://kurviq.com/mcp` and signs in (OAuth). On first use your browser
+  opens a Kurviq page where you allow the agent; the agent's client keeps
+  its tokens, Kurviq stores nothing (the tokens are sealed by the Worker and
+  name your browser's pairing). The agent then works through your open
   Kurviq tab: it reads, draws and edits your scenes (with or without GitHub),
   and its edits are merged with yours. The tab must be open while the agent
-  works. Treat the link like a password; **Make a new link** replaces it.
-  Agents find everything they need at <https://kurviq.com/llms.txt>.
+  works. **Sign out all agents** gives your browser a new pairing, which cuts
+  every agent off. The old personal link `https://kurviq.com/mcp/<key>` only
+  works while you allow it in the MCP dialog. Agents find everything they
+  need at <https://kurviq.com/llms.txt>.
   Images from the agent's machine (illustrations, screenshots): the agent
-  uploads them with `curl --data-binary @image.png
-  https://kurviq.com/mcp/<key>/upload` and adds them by the `fileId` it
+  uploads them with `curl --data-binary @image.png <upload address>` (from
+  the MCP server's instructions) and adds them by the `fileId` it
   gets back; the Worker passes the file straight to the tab (nothing is
   stored), and the image's bytes never go through the model.
 

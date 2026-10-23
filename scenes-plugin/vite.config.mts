@@ -732,7 +732,7 @@ const kurviqPwa = () =>
   VitePWA({
     registerType: "autoUpdate",
     workbox: {
-      navigateFallbackDenylist: [/^\/auth\//, /^\/mcp(\/|$)/, /^\/live\//, /^\/llms\.txt$/, /^\/(imprint|privacy)(\.html)?$/, /\.txt$/],
+      navigateFallbackDenylist: [/^\/auth\//, /^\/oauth\//, /^\/\.well-known\//, /^\/mcp(\/|$)/, /^\/live\//, /^\/llms\.txt$/, /^\/(imprint|privacy)(\.html)?$/, /\.txt$/],
       globIgnores: ["fonts.css", "**/locales/**", "service-worker.js", "**/*.chunk-*.js", "**/CodeMirrorEditor-*.js"],
       // only this site's own files, matched by path (a pattern on the whole URL
       // would also catch GitHub API requests that happen to contain "woff2");

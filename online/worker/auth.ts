@@ -40,7 +40,7 @@ type Session = {
 // encrypted cookies (AES-GCM)
 // -----------------------------------------------------------------------------
 
-const b64url = (bytes: Uint8Array) =>
+export const b64url = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 const fromB64url = (text: string) => {
@@ -61,7 +61,7 @@ const cookieKey = async (env: AuthEnv) => {
   return cachedKey.key;
 };
 
-const seal = async (env: AuthEnv, value: unknown, purpose: string) => {
+export const seal = async (env: AuthEnv, value: unknown, purpose: string) => {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = new TextEncoder().encode(JSON.stringify(value));
   const sealed = new Uint8Array(
@@ -70,7 +70,7 @@ const seal = async (env: AuthEnv, value: unknown, purpose: string) => {
   return `${b64url(iv)}.${b64url(sealed)}`;
 };
 
-const unseal = async <T>(env: AuthEnv, text: string | undefined, purpose: string): Promise<T | null> => {
+export const unseal = async <T>(env: AuthEnv, text: string | undefined, purpose: string): Promise<T | null> => {
   if (!text) {
     return null;
   }

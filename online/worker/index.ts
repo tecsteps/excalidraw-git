@@ -2,8 +2,12 @@
 //
 //   /auth/*          Connect GitHub (./auth.ts) — stateless, encrypted cookie
 //   /live/<key>      WebSocket of a Kurviq tab to its agent pairing (./pairing.ts)
-//   /mcp/<key>       remote MCP for agents (scenes-mcp/tools.mjs), answered
-//                    through the pairing's open Kurviq tab
+//   /mcp             remote MCP for agents (scenes-mcp/tools.mjs), answered
+//                    through the pairing's open Kurviq tab; agents sign in
+//                    (OAuth, ./oauth.ts) and the user allows them in Kurviq
+//   /mcp/<key>       the old link with the key in the URL: only answered by
+//                    tabs whose user still allows it
+//   /oauth/*, /.well-known/oauth-*  the sign-in (./oauth.ts)
 //   /llms.txt        how agents use Kurviq
 //   /api/public/…    public scenes, cached (./shared.ts)
 //   /api/fonts/…     fonts from Google Fonts for "Add font", cached (./fonts.ts)
@@ -18,6 +22,7 @@ import { createScenesMcp } from "../../scenes-mcp/tools.mjs";
 import llmsTxt from "../llms.txt";
 import { handleAuth } from "./auth";
 import { handleFonts } from "./fonts";
+import { bearerPairing, handleOAuth, pairingName, unauthorized, uploadPairing, uploadToken } from "./oauth";
 import { handlePublicApi, handleSharedPage } from "./shared";
 import { kurviqSkill } from "./skill";
 
@@ -34,11 +39,24 @@ type Env = AuthEnv & {
 
 const KEY_RE = /^[A-Za-z0-9_-]{32}$/;
 
-/** the pairing's Durable Object; named by a hash, so the key itself is never stored */
-const pairingStub = async (env: Env, key: string) => {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`kurviq-pairing:${key}`)));
-  const name = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return env.PAIRING.get(env.PAIRING.idFromName(name));
+/**
+ * Who an agent request is for: the pairing (the Durable Object, named by the
+ * hash of the browser's agent key, so the key itself is never stored), how
+ * the agent came (signed in, or the old link with the key in the URL) and
+ * where it uploads images and big edits
+ */
+type Access = { pairing: string; via: "oauth" | "link"; uploadUrl: string };
+
+const pairingStub = (env: Env, access: Access) => env.PAIRING.get(env.PAIRING.idFromName(access.pairing));
+
+/** a request to the pairing: says how the agent came (the tabs decide whether they answer) */
+const toPairing = (access: Access, path: string, init: RequestInit = {}, app?: string) => {
+  const headers = new Headers(init.headers);
+  headers.set("X-Kurviq-Via", access.via);
+  if (app) {
+    headers.set("X-Kurviq-App", app);
+  }
+  return new Request(`https://pairing${path}`, { ...init, headers });
 };
 
 const CORS = {
@@ -76,14 +94,14 @@ const imageType = (bytes: Uint8Array): string | null => {
  * { "type": "image", "fileId": "…" } to a scene. The image's bytes never
  * pass through the model.
  */
-const handleUpload = async (request: Request, env: Env, key: string) => {
+const handleUpload = async (request: Request, env: Env, access: Access | null) => {
   const answer = (status: number, body: unknown) =>
     withCors(new Response(JSON.stringify(body, null, 2), { status, headers: { "Content-Type": "application/json" } }));
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: CORS });
   }
-  if (!KEY_RE.test(key)) {
-    return answer(404, { error: "Unknown agent link" });
+  if (!access) {
+    return answer(404, { error: "Unknown or expired upload address: read_me (or the tool descriptions) has the current one" });
   }
   if (request.method !== "POST") {
     return answer(405, { error: "POST the image file as the request body: curl --data-binary @image.png <this URL>" });
@@ -101,7 +119,7 @@ const handleUpload = async (request: Request, env: Env, key: string) => {
   const id = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   const first = bytes.find((byte) => byte !== 0x20 && byte !== 0x0a && byte !== 0x0d && byte !== 0x09);
   if (first === 0x7b || first === 0x5b) {
-    return uploadPayload(request, env, key, id, bytes, answer);
+    return uploadPayload(request, env, access, id, bytes, answer);
   }
   const mimeType = imageType(bytes);
   if (!mimeType) {
@@ -111,13 +129,17 @@ const handleUpload = async (request: Request, env: Env, key: string) => {
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   }
-  const stub = await pairingStub(env, key);
-  const res = await stub.fetch(
-    new Request("https://pairing/api/app/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Kurviq-App": new URL(request.url).origin },
-      body: JSON.stringify({ type: "upload", file: { id, mimeType, dataURL: `data:${mimeType};base64,${btoa(binary)}` } }),
-    }),
+  const res = await pairingStub(env, access).fetch(
+    toPairing(
+      access,
+      "/api/app/command",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "upload", file: { id, mimeType, dataURL: `data:${mimeType};base64,${btoa(binary)}` } }),
+      },
+      new URL(request.url).origin,
+    ),
   );
   const body = (await res.json().catch(() => ({}))) as { result?: { fileId: string; width: number; height: number }; error?: string };
   if (!res.ok || !body.result) {
@@ -146,7 +168,7 @@ const MAX_PAYLOAD_BYTES = 1_000_000;
 const uploadPayload = async (
   request: Request,
   env: Env,
-  key: string,
+  access: Access,
   id: string,
   bytes: Uint8Array,
   answer: (status: number, body: unknown) => Response,
@@ -154,13 +176,17 @@ const uploadPayload = async (
   if (bytes.length > MAX_PAYLOAD_BYTES) {
     return answer(413, { error: `An edit payload may be at most ${MAX_PAYLOAD_BYTES / 1_000_000} MB: split it into several edits` });
   }
-  const stub = await pairingStub(env, key);
-  const res = await stub.fetch(
-    new Request("https://pairing/api/app/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Kurviq-App": new URL(request.url).origin },
-      body: JSON.stringify({ type: "upload-payload", payload: { id, json: new TextDecoder().decode(bytes) } }),
-    }),
+  const res = await pairingStub(env, access).fetch(
+    toPairing(
+      access,
+      "/api/app/command",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "upload-payload", payload: { id, json: new TextDecoder().decode(bytes) } }),
+      },
+      new URL(request.url).origin,
+    ),
   );
   const body = (await res.json().catch(() => ({}))) as { result?: Record<string, unknown>; error?: string };
   if (!res.ok || !body.result) {
@@ -192,22 +218,25 @@ const toolCalls = async (request: Request): Promise<Array<{ id: unknown; name: s
   }
 };
 
-const handleMcp = async (request: Request, env: Env, key: string) => {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS });
-  }
+const handleMcp = async (request: Request, env: Env, access: Access) => {
   const app = new URL(request.url).origin;
-  const stub = await pairingStub(env, key);
-  const unreachable = `Kurviq could not reach the user's browser. Ask the user to open ${app} (in the browser this agent link was made in).`;
+  const stub = pairingStub(env, access);
+  const unreachable =
+    access.via === "oauth"
+      ? `Kurviq could not reach the user's browser: no Kurviq tab is open in the browser where the user allowed this agent, or the user signed out all agents since (then sign in again: in Claude Code /mcp → kurviq → Re-authenticate). Ask the user to open ${app} there.`
+      : `Kurviq could not reach the user's browser. Ask the user to open ${app} (in the browser this agent link was made in).`;
   // no tab behind this link: nothing runs (and nothing is fetched on its behalf)
   const calls = (await toolCalls(request)).filter((call) => !WITHOUT_TAB.has(call.name));
   if (calls.length) {
-    const state = (await (await stub.fetch(new Request("https://pairing/api/app/state"))).json()) as { connected?: boolean };
+    const state = (await (await stub.fetch(toPairing(access, "/api/app/state", {}, app))).json()) as {
+      connected?: boolean;
+      refused?: string;
+    };
     if (!state.connected) {
       const answers = calls.map((call) => ({
         jsonrpc: "2.0",
         id: call.id,
-        result: { content: [{ type: "text", text: unreachable }], isError: true },
+        result: { content: [{ type: "text", text: state.refused || unreachable }], isError: true },
       }));
       return withCors(
         new Response(JSON.stringify(answers.length === 1 ? answers[0] : answers), {
@@ -225,14 +254,10 @@ const handleMcp = async (request: Request, env: Env, key: string) => {
     leanReads: true,
     // no access to the agent's files here: images and big edits are uploaded
     localFiles: false,
-    uploadUrl: `${app}/mcp/${key}/upload`,
-    skill: kurviqSkill(app, `${app}/mcp/${key}/upload`),
+    uploadUrl: access.uploadUrl,
+    skill: kurviqSkill(app, access.uploadUrl),
     unreachable,
-    serverFetch: (pathname: string, init: RequestInit = {}) => {
-      const headers = new Headers(init.headers);
-      headers.set("X-Kurviq-App", app);
-      return stub.fetch(new Request(`https://pairing${pathname}`, { ...init, headers }));
-    },
+    serverFetch: (pathname: string, init: RequestInit = {}) => stub.fetch(toPairing(access, pathname, init, app)),
     registerUpstream: (mcp: unknown, store: unknown) => registerTools(mcp as any, "/bundle", store as any),
     savePdf: async () => {
       throw new Error("PDF export is not available through the Kurviq MCP; the user exports PDFs in Kurviq (Slides sidebar → PDF).");
@@ -270,28 +295,58 @@ export default {
       if (request.headers.get("Origin") !== url.origin) {
         return new Response("Forbidden", { status: 403 });
       }
-      const stub = await pairingStub(env, live[1]);
+      const stub = env.PAIRING.get(env.PAIRING.idFromName(await pairingName(live[1])));
       return stub.fetch(new Request(`https://pairing/live${url.search}`, request));
     }
 
+    const oauth = await handleOAuth(request, env);
+    if (oauth) {
+      return oauth;
+    }
+
+    // uploads of a signed-in agent: /mcp/upload/<token> (curl can't sign in; the token names the pairing, for a week)
+    const signedUpload = url.pathname.match(/^\/mcp\/upload\/([^/]+)\/?$/);
+    if (signedUpload) {
+      const pairing = await uploadPairing(env, signedUpload[1]);
+      return handleUpload(request, env, pairing ? { pairing, via: "oauth", uploadUrl: url.toString() } : null);
+    }
+    // the old link: /mcp/<key>/upload
     const upload = url.pathname.match(/^\/mcp\/([^/]+)\/upload\/?$/);
     if (upload) {
-      return handleUpload(request, env, upload[1]);
+      const key = upload[1];
+      return handleUpload(
+        request,
+        env,
+        KEY_RE.test(key) ? { pairing: await pairingName(key), via: "link", uploadUrl: `${url.origin}/mcp/${key}/upload` } : null,
+      );
     }
 
     const mcp = url.pathname.match(/^\/mcp(?:\/([^/]*))?\/?$/);
     if (mcp) {
-      if (!mcp[1] || !KEY_RE.test(mcp[1])) {
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: CORS });
+      }
+      if (!mcp[1]) {
+        // signed in (OAuth); without a token: where to sign in
+        const pairing = await bearerPairing(request, env);
+        if (!pairing || pairing === "invalid") {
+          return unauthorized(url.origin, pairing === "invalid");
+        }
+        const uploadUrl = `${url.origin}/mcp/upload/${await uploadToken(env, pairing)}`;
+        return handleMcp(request, env, { pairing, via: "oauth", uploadUrl });
+      }
+      if (!KEY_RE.test(mcp[1])) {
         return withCors(
           new Response(
             JSON.stringify({
-              error: `This is not a complete Kurviq agent link. Open ${url.origin}, click "MCP" (top left) and copy the link shown there: ${url.origin}/mcp/<your key>. See ${url.origin}/llms.txt`,
+              error: `Not a Kurviq agent address. Add ${url.origin}/mcp as a remote MCP server: the agent signs in and the user allows it in Kurviq. See ${url.origin}/llms.txt`,
             }),
             { status: 404, headers: { "Content-Type": "application/json" } },
           ),
         );
       }
-      return handleMcp(request, env, mcp[1]);
+      const key = mcp[1];
+      return handleMcp(request, env, { pairing: await pairingName(key), via: "link", uploadUrl: `${url.origin}/mcp/${key}/upload` });
     }
 
     if (url.pathname === "/llms.txt") {
