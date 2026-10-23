@@ -927,6 +927,50 @@ export const listSpaces = async (): Promise<Space[]> => {
   return spaces;
 };
 
+export type SpaceScenes = Space & { scenes: string[] };
+
+let otherSpaces: { at: number; value: Promise<SpaceScenes[]> } | null = null;
+
+/**
+ * The scenes of the user's other spaces (each one's <owner>/kurviq-scenes),
+ * for a scene list that shows them all; asked again after a minute
+ */
+export const otherSpacesScenes = (): Promise<SpaceScenes[]> => {
+  if (otherSpaces && Date.now() - otherSpaces.at < 60_000) {
+    return otherSpaces.value;
+  }
+  const here = (state.repo?.owner ?? "").toLowerCase();
+  const value = (async () => {
+    const spaces = (await listSpaces()).filter((space) => space.owner.toLowerCase() !== here);
+    const found = await Promise.all(
+      spaces.map(async (space): Promise<SpaceScenes | null> => {
+        try {
+          const repo = await findScenesRepo(space.owner);
+          if (!repo?.private) {
+            return null;
+          }
+          const dir = await gh(`${repoPath(repo)}/contents/${SCENES_DIR}?ref=${encodePath(repo.branch)}`);
+          const scenes = dir.status === 200 && Array.isArray(dir.data)
+            ? dir.data
+                .filter((entry: any) => entry.type === "file" && entry.name.endsWith(EXTENSION))
+                .map((entry: any) => entry.name.slice(0, -EXTENSION.length) as string)
+                .filter((name: string) => NAME_RE.test(name))
+            : [];
+          return { ...space, scenes };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return found.filter((entry): entry is SpaceScenes => !!entry);
+  })();
+  value.catch(() => {
+    otherSpaces = null;
+  });
+  otherSpaces = { at: Date.now(), value };
+  return value;
+};
+
 /** <owner>/kurviq-scenes as GitHub shows it to this user (readOnly set when it can't be changed), or null */
 export const findScenesRepo = (owner: string) => lookUpRepo(owner, SCENES_REPO);
 

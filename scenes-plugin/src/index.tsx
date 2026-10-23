@@ -10,7 +10,8 @@ import {
   PlusIcon,
   save,
 } from "@excalidraw/excalidraw/components/icons";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
@@ -25,7 +26,8 @@ import { AddFontOverlay } from "./fontsUI";
 import { PublicSceneOverlay } from "./publicScene";
 import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
-import { connection } from "./online/github";
+import { connection, otherSpacesScenes } from "./online/github";
+import type { SpaceScenes } from "./online/github";
 import {
   ConnectGitHubOffer,
   GitHubPanel,
@@ -35,6 +37,7 @@ import {
   RepoSetupDialog,
   SceneSharing,
   UpdateBanner,
+  setUpSync,
   startOnline,
 } from "./online/ui";
 
@@ -177,12 +180,59 @@ const ICON_PATHS = {
   ),
 };
 
+/**
+ * A tooltip that shows right away (the browser's own, from `title`, waits
+ * about a second and can't be styled); on the page, so lists that scroll
+ * don't cut it off
+ */
+const QuickTip = ({ tip, className, children }: { tip: string; className?: string; children: ReactNode }) => {
+  const [at, setAt] = useState<{ x: number; y: number; above: boolean } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <span
+      className={className}
+      aria-label={tip}
+      role="img"
+      onMouseEnter={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const above = rect.bottom + 48 > window.innerHeight;
+        timer.current = window.setTimeout(
+          () => setAt({ x: rect.left + rect.width / 2, y: above ? rect.top - 8 : rect.bottom + 8, above }),
+          120,
+        );
+      }}
+      onMouseLeave={() => {
+        window.clearTimeout(timer.current);
+        setAt(null);
+      }}
+    >
+      {children}
+      {at &&
+        createPortal(
+          <div
+            className={clsx("kurviq-tip", { "kurviq-tip--above": at.above })}
+            role="tooltip"
+            style={(() => {
+              // kept on screen; the arrow still points at the icon
+              const left = Math.min(Math.max(at.x, 140), window.innerWidth - 140);
+              return { left, top: at.y, "--tip-arrow": `calc(50% + ${at.x - left}px)` } as React.CSSProperties;
+            })()}
+          >
+            {tip}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+};
+
 const PlaceIcon = ({ kind, title }: { kind: keyof typeof ICON_PATHS; title: string }) => (
-  <span className={`scenes-place scenes-place--${kind}`} title={title} aria-label={title} role="img">
+  <QuickTip tip={title} className={`scenes-place scenes-place--${kind}`}>
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       {ICON_PATHS[kind]}
     </svg>
-  </span>
+  </QuickTip>
 );
 
 /** the repository scenes sync with, as "owner/name" (null: none) */
@@ -194,8 +244,16 @@ const useRepoName = () => {
   return repoInfo ? `${repoInfo.owner}/${repoInfo.name}` : null;
 };
 
-const ScenePlace = ({ item }: { item: Pick<SceneListItem, "name" | "onGitHub" | "localOnly" | "public" | "status"> }) => {
-  const repo = useRepoName();
+const ScenePlace = ({
+  item,
+  repo: otherRepo,
+}: {
+  item: Pick<SceneListItem, "name" | "onGitHub" | "localOnly" | "public" | "status">;
+  /** a scene of another space: its repository */
+  repo?: string;
+}) => {
+  const ownRepo = useRepoName();
+  const repo = otherRepo ?? ownRepo;
   const inRepo = item.name !== null && !item.localOnly && item.onGitHub;
   const owner = repo?.split("/")[0];
   const where = inRepo
@@ -335,6 +393,14 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
   const query = useSceneFilter();
   /** null: the default (first match, or create) */
   const [picked, setActive] = useState<number | null>(null);
+  const { user, repo } = useSyncExternalStore(connection.subscribe, connection.getState);
+  // the user's other spaces (organizations): their scenes are listed too
+  const [others, setOthers] = useState<SpaceScenes[]>([]);
+  useEffect(() => {
+    if (IS_ONLINE && user && repo) {
+      otherSpacesScenes().then(setOthers, () => setOthers([]));
+    }
+  }, [user, repo]);
 
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -347,25 +413,41 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
   }, [onClose]);
 
   const needle = query.trim().toLowerCase();
-  const items = list.filter((item) => matchesFilter(item.name, query, current));
+  type Entry = { item: SceneListItem; owner: string | null } | { item?: undefined; owner: string; name: string };
+  const here = repo?.owner ?? null;
+  const items: Entry[] = [
+    ...list.filter((item) => matchesFilter(item.name, query, current)).map((item) => ({ item, owner: here })),
+    ...others.flatMap((space) =>
+      space.scenes.filter((name) => matchesFilter(name, query, null)).map((name) => ({ owner: space.owner, name })),
+    ),
+  ];
+  const nameOf = (entry: Entry) => (entry.item ? entry.item.name : entry.name);
+  // one list, by name (Untitled first), each scene with its space when there are several
+  items.sort((a, b) =>
+    nameOf(a) === null ? -1 : nameOf(b) === null ? 1 : nameOf(a)!.localeCompare(nameOf(b)!) || (a.item ? -1 : 1),
+  );
+  const showOwner = others.length > 0;
   // "create" only when the text matches no scene (a sticky filter such as a
   // customer name shouldn't offer itself as a new scene every time)
   const canCreate =
     !!needle &&
     SCENE_NAME_RE.test(query.trim()) &&
-    !list.some((item) => (item.name ?? UNTITLED_LABEL).toLowerCase().includes(needle));
+    !items.some((entry) => (nameOf(entry) ?? UNTITLED_LABEL).toLowerCase().includes(needle));
   const count = items.length + (canCreate ? 1 : 0);
   // highlight the first real match (the open scene is always listed, even
   // when it doesn't match), or "create" when nothing matches
-  const firstMatch = items.findIndex((item) => (item.name ?? UNTITLED_LABEL).toLowerCase().includes(needle));
+  const firstMatch = items.findIndex((entry) => (nameOf(entry) ?? UNTITLED_LABEL).toLowerCase().includes(needle));
   const active = picked ?? (needle && firstMatch < 0 && canCreate ? items.length : Math.max(0, firstMatch));
 
   const choose = (index: number) => {
     onClose();
     if (index < items.length) {
-      const { name } = items[index];
-      if (name !== current) {
-        scenesController.open(name).catch(ignore);
+      const entry = items[index];
+      if (!entry.item) {
+        // a scene of another space: the tab switches into that space and opens it
+        setUpSync(entry.owner, `/${encodeURIComponent(entry.name)}`);
+      } else if (entry.item.name !== current) {
+        scenesController.open(entry.item.name).catch(ignore);
       }
     } else if (canCreate) {
       scenesController.openOrCreate(query.trim()).catch(ignore);
@@ -417,24 +499,51 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
         )}
       </div>
       <div className="scenes-switcher__list">
-        {items.map((item, index) => (
-          <button
-            type="button"
-            role="option"
-            aria-selected={item.name === current}
-            key={item.name ?? "\u0000untitled"}
-            className={clsx("scenes-switcher__item", {
-              "scenes-switcher__item--current": item.name === current,
-              "scenes-switcher__item--active": index === active,
-            })}
-            onMouseEnter={() => setActive(index)}
-            onClick={() => choose(index)}
-          >
-            <span className="scenes-switcher__name">{item.name ?? UNTITLED_LABEL}</span>
-            {!["synced", "local", "local-only", "untitled"].includes(item.status) && <StatusBadge status={item.status} compact />}
-            <ScenePlace item={item} />
-          </button>
-        ))}
+        {items.map((entry, index) => {
+          const { item } = entry;
+          const isCurrent = !!item && item.name === current;
+          return (
+            <button
+              type="button"
+              role="option"
+              aria-selected={isCurrent}
+              key={item ? `here\u0000${item.name ?? "\u0000untitled"}` : `${entry.owner}\u0000${entry.name}`}
+              className={clsx("scenes-switcher__item", {
+                "scenes-switcher__item--current": isCurrent,
+                "scenes-switcher__item--active": index === active,
+              })}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => choose(index)}
+            >
+              <span className="scenes-switcher__name">{nameOf(entry) ?? UNTITLED_LABEL}</span>
+              {showOwner && entry.owner && (
+                <QuickTip
+                  tip={
+                    item
+                      ? `${entry.owner}'s space: the one this tab shows`
+                      : `${entry.owner}'s space: opening it switches this tab to that space`
+                  }
+                  className={clsx("scenes-switcher__owner", { "scenes-switcher__owner--other": !item })}
+                >
+                  {entry.owner}
+                </QuickTip>
+              )}
+              {item ? (
+                <>
+                  {!["synced", "local", "local-only", "untitled"].includes(item.status) && (
+                    <StatusBadge status={item.status} compact />
+                  )}
+                  <ScenePlace item={item} />
+                </>
+              ) : (
+                <ScenePlace
+                  item={{ name: entry.name, onGitHub: true, localOnly: false, public: false, status: "synced" }}
+                  repo={`${entry.owner}/kurviq-scenes`}
+                />
+              )}
+            </button>
+          );
+        })}
         {canCreate && (
           <button
             type="button"

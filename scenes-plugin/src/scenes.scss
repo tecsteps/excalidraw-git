@@ -12,6 +12,26 @@
     flex: none;
   }
 
+  // the space (account / organization) a scene belongs to, in the mixed list
+  .scenes-switcher__owner {
+    flex: none;
+    max-width: 8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--color-surface-low, rgba(0, 0, 0, 0.05));
+    color: var(--color-gray-60, var(--text-primary-color));
+    font-size: 0.68rem;
+    font-weight: 500;
+
+    &--other {
+      background: var(--color-primary-light, rgba(105, 101, 219, 0.12));
+      color: var(--color-primary, #6965db);
+    }
+  }
+
   // Slides and MCP at the top right, before the sidebar button
   .scenes-top-right {
     display: flex;
@@ -954,4 +974,60 @@
 .excalidraw .plus-banner,
 .plus-banner {
   display: none !important;
+}
+
+// QuickTip (index.tsx): on the page itself (portal), outside .excalidraw
+.kurviq-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: #1f1f24;
+  color: #f4f4f6;
+  font-family: "Assistant", system-ui, -apple-system, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  transform: translateX(-50%);
+  animation: kurviq-tip-in 0.12s ease-out;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: var(--tip-arrow, 50%);
+    top: -4px;
+    width: 8px;
+    height: 8px;
+    background: inherit;
+    transform: translateX(-50%) rotate(45deg);
+    border-radius: 1px;
+  }
+
+  &--above {
+    transform: translate(-50%, -100%);
+    animation-name: kurviq-tip-in-above;
+
+    &::before {
+      top: auto;
+      bottom: -4px;
+    }
+  }
+}
+
+@keyframes kurviq-tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -3px);
+  }
+}
+
+@keyframes kurviq-tip-in-above {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-100% + 3px));
+  }
 }
