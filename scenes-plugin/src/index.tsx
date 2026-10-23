@@ -119,6 +119,9 @@ const useAttachController = () => {
         connectRouter();
         scenesController.startSync();
       }
+      // unmounted (e.g. a crash while rendering; the editor then hands out
+      // null or a destroyed API): nothing may be synced from it any more
+      return () => scenesController.editorGone();
     }
   }, [api]);
   return api;

@@ -275,6 +275,10 @@ class ScenesController {
     if (this.api === api) {
       return;
     }
+    if (api.isDestroyed) {
+      this.editorGone();
+      return;
+    }
     // the app loads its initial scene asynchronously — switching scenes
     // before that would get overwritten
     const waitForLoad = () =>
@@ -323,6 +327,19 @@ class ScenesController {
       window.setInterval(() => this.syncNow({ refresh: true }), POLL_MS),
       window.setInterval(() => this.maybePushCurrent(), 5_000),
     );
+  }
+
+  /**
+   * The editor unmounted (e.g. it crashed while rendering). Its API then
+   * reads an emptied scene: nothing may be read, stored or pushed from it any
+   * more, or the empty canvas would be synced over the scene.
+   */
+  editorGone() {
+    if (!this.api) {
+      return;
+    }
+    console.error("[scenes] the editor is gone (unmounted): sync stopped, nothing is saved from it");
+    this.detach();
   }
 
   detach() {
@@ -1331,6 +1348,9 @@ class ScenesController {
     if (stored === null) {
       return null;
     }
+    if (!manual && isEmptyJson(stored) && (await this.refuseEmptyPush(name))) {
+      return null;
+    }
     // the file names its scene (the server rejects content of another scene);
     // stored copies may still carry an old name (e.g. from before a rename)
     const json = withSceneName(stored, name);
@@ -1436,6 +1456,43 @@ class ScenesController {
     this.refresh();
   }
 
+  /**
+   * Auto-sync never pushes an empty scene over one that has content on
+   * GitHub: an editor that lost its canvas (a crash, a broken load) looks
+   * exactly like that. If nothing was deleted here in this session, GitHub's
+   * version comes back; otherwise the empty version stays local until the
+   * user saves it on purpose.
+   */
+  private async refuseEmptyPush(name: string) {
+    if (this.remoteShaOf(name) === null) {
+      return false;
+    }
+    let latest;
+    try {
+      latest = await scenesApi.load(name);
+    } catch {
+      return true; // can't tell: rather not push
+    }
+    if (isEmptyJson(latest.json)) {
+      return false;
+    }
+    const deletedHere =
+      name === this.meta.current && this.api ? this.api.getSceneElementsIncludingDeleted().some((el) => el.isDeleted) : false;
+    if (deletedHere) {
+      this.log("error", `Not pushed: "${name}" is empty here but not on GitHub. Save it in the sidebar if you really want to empty it.`);
+      return true;
+    }
+    const meta = this.sceneMeta(name);
+    await this.writeLocal(name, latest.json, { dirty: false });
+    meta.baseSha = latest.sha;
+    meta.remoteSha = latest.sha;
+    delete meta.conflict;
+    this.persistMeta();
+    this.log("pull", `"${name}" was empty here (not by an edit): loaded it from GitHub instead of pushing the empty version`);
+    this.refresh();
+    return true;
+  }
+
   /** both sides changed: three-way merge per element */
   private async mergeScene(
     name: string,
@@ -1478,6 +1535,21 @@ class ScenesController {
       name === this.meta.current
         ? this.serializeCurrent().json === mineJson
         : (await getSnapshot(name))?.json === mineJson;
+    // a local copy without any elements never deletes GitHub's content by a
+    // merge (an editor that lost its canvas looks like "the user deleted everything")
+    if (!getNonDeletedElements(mine.elements || []).length && getNonDeletedElements(theirsData.elements || []).length) {
+      if (!(await unchanged())) {
+        return null;
+      }
+      await this.writeLocal(name, theirs.json, { dirty: false });
+      meta.baseSha = theirs.sha;
+      meta.remoteSha = theirs.sha;
+      delete meta.conflict;
+      this.persistMeta();
+      this.log("pull", `"${name}" was empty here: took GitHub's version`);
+      this.refresh();
+      return null;
+    }
     let merged = mergeElements(base?.elements, mine.elements || [], theirsData.elements || [], choices);
     let settled: string[] = [];
     if (merged.clashes.length && this.clashMode() === "newest") {
