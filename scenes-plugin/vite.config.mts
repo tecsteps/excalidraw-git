@@ -559,6 +559,9 @@ const kurviqOnline = () => ({
       return patch("AppMainMenu.tsx", [
         [/<MainMenu\.ItemLink\s+icon=\{ExcalLogo\}[\s\S]*?<\/MainMenu\.ItemLink>/, ""],
         [/<MainMenu\.ItemLink\s+icon=\{loginIcon\}[\s\S]*?<\/MainMenu\.ItemLink>/, ""],
+        // Excalidraw's and Kurviq's GitHub, posts about Kurviq (not Excalidraw's X / Discord)
+        ["<MainMenu.DefaultItems.Socials />", "<KurviqSocials />"],
+        [/^/, `import { KurviqSocials } from ${JSON.stringify(path.resolve(HERE, "src/online/ui.tsx"))};\n`],
       ]);
     }
     return null;

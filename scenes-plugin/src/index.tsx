@@ -153,6 +153,81 @@ const STATUS: Record<SyncStatus, { icon: string; label: string; tone: string }> 
   untitled: { icon: "○", label: "Not saved", tone: "muted" },
 };
 
+// where a scene is kept (this browser / a repository) and who can see it
+// (private / public): two small icons with tooltips, in the list and the pill
+
+const ICON_PATHS = {
+  browser: (
+    <path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16" />
+  ),
+  repository: <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />,
+  private: (
+    <>
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </>
+  ),
+  public: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
+    </>
+  ),
+};
+
+const PlaceIcon = ({ kind, title }: { kind: keyof typeof ICON_PATHS; title: string }) => (
+  <span className={`scenes-place scenes-place--${kind}`} title={title} aria-label={title} role="img">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {ICON_PATHS[kind]}
+    </svg>
+  </span>
+);
+
+/** the repository scenes sync with, as "owner/name" (null: none) */
+const useRepoName = () => {
+  const online = useSyncExternalStore(connection.subscribe, connection.getState);
+  if (IS_ONLINE) {
+    return online.repo ? `${online.repo.owner}/${online.repo.name}` : null;
+  }
+  return repoInfo ? `${repoInfo.owner}/${repoInfo.name}` : null;
+};
+
+const ScenePlace = ({ item }: { item: Pick<SceneListItem, "name" | "onGitHub" | "localOnly" | "public" | "status"> }) => {
+  const repo = useRepoName();
+  const inRepo = item.name !== null && !item.localOnly && item.onGitHub;
+  const owner = repo?.split("/")[0];
+  const where = inRepo
+    ? { kind: "repository" as const, title: `In the repository ${item.public && owner ? `${owner}/kurviq-public` : repo ?? "on GitHub"}${item.status === "synced" ? "" : ` (${STATUS[item.status].label.toLowerCase()})`}` }
+    : {
+        kind: "browser" as const,
+        title:
+          item.name === null
+            ? "Only in this browser: not saved yet"
+            : item.localOnly
+            ? "Only in this browser: kept local on purpose, never synced"
+            : repo
+            ? `Only in this browser so far: not in ${repo} yet`
+            : "Only in this browser (no repository connected)",
+      };
+  // private / public is a GitHub thing: the local install only knows its repository
+  const who =
+    !IS_ONLINE && inRepo
+      ? null
+      : item.public && inRepo
+      ? { kind: "public" as const, title: "Public: anyone with the link can view it" }
+      : {
+          kind: "private" as const,
+          title: inRepo ? `Private: only people with access to ${repo ?? "the repository"} can see it` : "Private: only you, in this browser",
+        };
+  return (
+    <span className="scenes-places">
+      <PlaceIcon {...where} />
+      {who && <PlaceIcon {...who} />}
+    </span>
+  );
+};
+
 const isOffline = (state: ScenesState) =>
   !state.sync.notConnected && (state.sync.serverReachable === false || state.sync.githubOnline === false);
 
@@ -174,7 +249,8 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
   const api = useAttachController();
   const state = useScenes();
   const { current, busy, list } = state;
-  const status = list.find((item) => item.name === current)?.status ?? "untitled";
+  const currentItem = list.find((item) => item.name === current);
+  const status = currentItem?.status ?? "untitled";
   const offline = isOffline(state);
   const [open, setOpen] = useState(false);
 
@@ -190,12 +266,14 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
       >
         <span className="scenes-pill__icon">{LoadIcon}</span>
         <span className="scenes-pill__name">{current ?? UNTITLED_LABEL}</span>
+        {currentItem && <ScenePlace item={currentItem} />}
         {state.checking ? (
           <span className="scenes-pill__status" title="Local copy, read-only while GitHub is checked">checking…</span>
         ) : busy === "saving" || state.sync.running ? (
           <span className="scenes-pill__status">syncing…</span>
         ) : (
-          status !== "synced" && !(state.sync.notConnected && status === "local-only") && <StatusBadge status={status} compact />
+          // "local" / "local-only": the browser icon says it
+          !["synced", "local", "local-only"].includes(status) && <StatusBadge status={status} compact />
         )}
         {offline && <span className="scenes-pill__offline" title="Offline — working locally">offline</span>}
         <span className="scenes-pill__caret" aria-hidden>▾</span>
@@ -333,7 +411,8 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
             onClick={() => choose(index)}
           >
             <span className="scenes-switcher__name">{item.name ?? UNTITLED_LABEL}</span>
-            {item.status !== "synced" && <StatusBadge status={item.status} compact />}
+            {!["synced", "local", "local-only", "untitled"].includes(item.status) && <StatusBadge status={item.status} compact />}
+            <ScenePlace item={item} />
           </button>
         ))}
         {canCreate && (
@@ -784,12 +863,8 @@ const SceneRow = ({
         >
           <span className="scenes-item__name">{item.name ?? <em>{UNTITLED_LABEL}</em>}</span>
           {item.name !== null && !item.autoSync && !item.localOnly && <span className="scenes-item__manual">manual</span>}
-          {item.public && (
-            <span className="scenes-item__public" title="Public: anyone with the link can view it">
-              public
-            </span>
-          )}
-          <StatusBadge status={item.status} compact={item.status === "synced"} />
+          {!["synced", "local", "local-only", "untitled"].includes(item.status) && <StatusBadge status={item.status} compact />}
+          <ScenePlace item={item} />
         </button>
         {item.name !== null && (
           <button

@@ -2,7 +2,7 @@
 // private repository <account>/kurviq-scenes), the "MCP" button with the agent link and prompt, and the
 // footer (built on Excalidraw, llms.txt).
 
-import { WelcomeScreen } from "@excalidraw/excalidraw";
+import { MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import { GithubIcon, ExternalLinkIcon } from "@excalidraw/excalidraw/components/icons";
 import clsx from "clsx";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -1035,6 +1035,21 @@ export const McpButton = () => {
 // -----------------------------------------------------------------------------
 
 /** bottom right of the canvas (injected by ../../vite.config.mts) */
+/** main menu: Excalidraw's and Kurviq's code, and the posts about Kurviq (instead of Excalidraw's X / Discord) */
+export const KurviqSocials = () => (
+  <>
+    <MainMenu.ItemLink icon={GithubIcon} href="https://github.com/excalidraw/excalidraw" aria-label="GitHub (Excalidraw)">
+      GitHub (Excalidraw)
+    </MainMenu.ItemLink>
+    <MainMenu.ItemLink icon={GithubIcon} href="https://github.com/tecsteps/kurviq" aria-label="GitHub (Kurviq)">
+      GitHub (Kurviq)
+    </MainMenu.ItemLink>
+    <MainMenu.ItemLink icon={LinkedInIcon} href="https://www.linkedin.com/feed/hashtag/kurviq/" aria-label="LinkedIn posts about Kurviq">
+      #kurviq on LinkedIn
+    </MainMenu.ItemLink>
+  </>
+);
+
 export const KurviqLegalLinks = () => (
   <span className="kq-legal">
     <a href="/imprint" target="_blank" rel="noopener">
