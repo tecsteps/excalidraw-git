@@ -745,3 +745,76 @@ body.slides-presenting {
     color: var(--color-gray-50);
   }
 }
+
+// -----------------------------------------------------------------------------
+// no slides yet
+// -----------------------------------------------------------------------------
+
+.excalidraw .slides-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.5rem 0.5rem 0.5rem;
+  text-align: center;
+
+  .slides-empty__art {
+    width: 160px;
+    height: 104px;
+    margin-bottom: 0.4rem;
+  }
+
+  .slides-empty__back {
+    fill: var(--island-bg-color);
+    stroke: var(--default-border-color);
+    stroke-width: 1.5;
+  }
+
+  .slides-empty__front {
+    fill: var(--island-bg-color);
+    stroke: var(--color-primary);
+    stroke-width: 2;
+  }
+
+  .slides-empty__line {
+    fill: var(--color-gray-30, #ced4da);
+
+    &--strong {
+      fill: var(--color-primary-light-darker, var(--color-primary));
+      opacity: 0.6;
+    }
+  }
+
+  .slides-empty__play {
+    fill: var(--color-primary);
+  }
+
+  .slides-empty__play-icon {
+    fill: #fff;
+  }
+
+  .slides-empty__title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary-color);
+  }
+
+  .slides-empty__text {
+    margin: 0;
+    max-width: 18rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--color-gray-60, var(--text-primary-color));
+  }
+
+  .slides-empty__cta {
+    height: 2.4rem;
+    padding: 0 1.2rem;
+    margin: 0.4rem 0;
+    font-size: 0.9rem;
+  }
+
+  .slides-hint {
+    max-width: 18rem;
+  }
+}

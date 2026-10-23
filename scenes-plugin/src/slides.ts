@@ -22,7 +22,7 @@ import {
   newElementWith,
   restoreElements,
 } from "@excalidraw/excalidraw";
-import { duplicateElements, refreshTextDimensions, syncInvalidIndices } from "@excalidraw/element";
+import { duplicateElements, getCommonBounds, refreshTextDimensions, syncInvalidIndices } from "@excalidraw/element";
 
 import type {
   ExcalidrawElement,
@@ -716,9 +716,12 @@ export const addSlide = (api: ExcalidrawImperativeAPI, after?: string) => {
   const template = getTemplate(elements);
   const width = template?.width ?? SLIDE_WIDTH;
   const height = template?.height ?? SLIDE_HEIGHT;
-  // the next free spot to the right of the anchor
-  let x = anchor ? anchor.x + anchor.width + SLIDE_GAP : 0;
-  const y = anchor ? anchor.y : 0;
+  // the next free spot to the right of the anchor; the first slide goes
+  // next to what is already drawn (not on top of it)
+  const drawn = elements.filter((el) => !el.isDeleted);
+  const [, minY, maxX] = drawn.length ? getCommonBounds(drawn) : [0, 0, -SLIDE_GAP * 2];
+  let x = anchor ? anchor.x + anchor.width + SLIDE_GAP : Math.round(maxX + SLIDE_GAP * 2);
+  const y = anchor ? anchor.y : Math.round(minY);
   while (elements.some((el) => isFrame(el) && el.x < x + width && el.x + el.width > x && el.y < y + height && el.y + el.height > y)) {
     x += width + SLIDE_GAP;
   }

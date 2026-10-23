@@ -546,6 +546,43 @@ const ThemeForm = () => {
   );
 };
 
+/** the first slide (and the deck template with its footer, if there is none yet) */
+const startPresentation = () => {
+  const id = addSlide(api());
+  if (!getTemplate(api().getSceneElementsIncludingDeleted())) {
+    createTemplate(api());
+  }
+  setTimeout(() => focusFrame(id), 50);
+};
+
+/** no slides yet: what slides are, and one button to start */
+const SlidesEmpty = () => (
+  <section className="slides-empty">
+    <svg className="slides-empty__art" viewBox="0 0 160 104" aria-hidden>
+      <rect x="34" y="6" width="96" height="60" rx="6" className="slides-empty__back" />
+      <rect x="22" y="18" width="96" height="60" rx="6" className="slides-empty__back" />
+      <rect x="10" y="30" width="96" height="60" rx="6" className="slides-empty__front" />
+      <rect x="22" y="42" width="44" height="6" rx="3" className="slides-empty__line slides-empty__line--strong" />
+      <rect x="22" y="54" width="62" height="4" rx="2" className="slides-empty__line" />
+      <rect x="22" y="63" width="52" height="4" rx="2" className="slides-empty__line" />
+      <circle cx="128" cy="78" r="20" className="slides-empty__play" />
+      <path d="M123 69.5v17l14-8.5z" className="slides-empty__play-icon" />
+    </svg>
+    <div className="slides-empty__title">No slides in this scene yet</div>
+    <p className="slides-empty__text">
+      Turn your canvas into a presentation: every slide is a frame you draw in. Present it full screen, share a link, or
+      export a PDF.
+    </p>
+    <button type="button" className="slides-btn slides-btn--primary slides-empty__cta" onClick={startPresentation}>
+      Start a presentation
+    </button>
+    <p className="slides-hint">
+      Adds the first slide next to your drawing, and a template for header, footer and page numbers. You can also draw
+      frames with the frame tool (F).
+    </p>
+  </section>
+);
+
 export const SlidesSidebar = () => {
   const { slides, activeId } = useDeck();
   const [pdfOpen, setPdfOpen] = useState(false);
@@ -556,57 +593,60 @@ export const SlidesSidebar = () => {
         <div className="scenes-sidebar__title">Slides</div>
       </Sidebar.Header>
       <div className="slides-body">
-        <div className="slides-row">
-          <button
-            type="button"
-            className="slides-btn slides-btn--primary"
-            disabled={!slides.some((s) => !s.skip)}
-            onClick={() => presenter.start(active ?? undefined)}
-            title="Present (Esc ends)"
-          >
-            ▶ Present
-          </button>
-          {IS_ONLINE && <PresentationLink />}
-          <button
-            type="button"
-            className="slides-btn"
-            onClick={() => {
-              const id = addSlide(api(), active ?? undefined);
-              setTimeout(() => focusFrame(id), 50);
-            }}
-          >
-            + Slide
-          </button>
-          <button
-            type="button"
-            className="slides-btn"
-            disabled={slides.length < 1}
-            onClick={() => slideSorter.open()}
-            title="All slides as a grid: drag to reorder, duplicate, delete"
-          >
-            Sort
-          </button>
-          <button
-            type="button"
-            className="slides-btn"
-            disabled={!slides.length}
-            aria-pressed={pdfOpen}
-            onClick={() => setPdfOpen(!pdfOpen)}
-          >
-            PDF
-          </button>
-        </div>
-        {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
         {!slides.length ? (
-          <p className="slides-hint">
-            Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them (or click one and press ↑ / ↓), or open “Sort” for all slides at once.
-          </p>
+          <SlidesEmpty />
         ) : (
-          <SlideList />
+          <>
+            <div className="slides-row">
+              <button
+                type="button"
+                className="slides-btn slides-btn--primary"
+                disabled={!slides.some((s) => !s.skip)}
+                onClick={() => presenter.start(active ?? undefined)}
+                title="Present (Esc ends)"
+              >
+                ▶ Present
+              </button>
+              {IS_ONLINE && <PresentationLink />}
+              <button
+                type="button"
+                className="slides-btn"
+                onClick={() => {
+                  const id = addSlide(api(), active ?? undefined);
+                  setTimeout(() => focusFrame(id), 50);
+                }}
+              >
+                + Slide
+              </button>
+              <button
+                type="button"
+                className="slides-btn"
+                disabled={slides.length < 1}
+                onClick={() => slideSorter.open()}
+                title="All slides as a grid: drag to reorder, duplicate, delete"
+              >
+                Sort
+              </button>
+              <button
+                type="button"
+                className="slides-btn"
+                disabled={!slides.length}
+                aria-pressed={pdfOpen}
+                onClick={() => setPdfOpen(!pdfOpen)}
+              >
+                PDF
+              </button>
+            </div>
+            {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
+            <SlideList />
+            <p className="slides-hint">
+              Drag slides to reorder them (or click one and press ↑ / ↓), or open “Sort” for all slides at once.
+            </p>
+            <StepPicker />
+            {active && <SlideDetails id={active} />}
+            <ThemeForm />
+          </>
         )}
-        <StepPicker />
-        {active && <SlideDetails id={active} />}
-        <ThemeForm />
       </div>
     </Sidebar>
   );
