@@ -18,14 +18,12 @@ type TabState = {
   visible?: boolean;
   focusedAt?: number;
   github?: boolean;
-  /** the user allows the old agent link (key in the URL, no sign-in) in this browser */
-  legacyLink?: boolean;
 };
 
 /**
  * How the agent got here (set by the Worker, X-Kurviq-Via): "oauth" = signed
  * in (the user allowed it in Kurviq), "link" = the old link with the key in
- * the URL, answered only by tabs that still allow it
+ * the URL, which is refused (the agent is told to sign in)
  */
 type Via = "oauth" | "link";
 
@@ -59,7 +57,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const httpError = (status: number, message: string) => Object.assign(new Error(message), { status });
 
 const legacyRefused = (app: string) =>
-  `This agent uses the old Kurviq link (the key in the URL), which the user has switched off. Connect with ${app}/mcp instead: the agent signs in once and the user allows it in Kurviq (e.g. claude mcp add --transport http kurviq ${app}/mcp). Ask the user to do this.`;
+  `This agent uses the old Kurviq link (the key in the URL), which doesn't work any more. Connect with ${app}/mcp instead: the agent signs in once and the user allows it in Kurviq (e.g. claude mcp add --transport http kurviq ${app}/mcp). Ask the user to do this.`;
 
 export class Pairing extends DurableObject {
   private pending = new Map<string, Pending>();
@@ -86,7 +84,7 @@ export class Pairing extends DurableObject {
 
   /** the tabs that answer an agent that came this way */
   private tabs(via: Via) {
-    return this.allTabs().filter((tab) => via === "oauth" || tab.state.legacyLink === true);
+    return via === "oauth" ? this.allTabs() : [];
   }
 
   /** the tab agents talk to: the visible, most recently focused one (or the one showing `scene`) */

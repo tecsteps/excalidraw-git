@@ -63,8 +63,8 @@ install:
   Kurviq tab: it reads, draws and edits your scenes (with or without GitHub),
   and its edits are merged with yours. The tab must be open while the agent
   works. **Sign out all agents** gives your browser a new pairing, which cuts
-  every agent off. The old personal link `https://kurviq.com/mcp/<key>` only
-  works while you allow it in the MCP dialog. Agents find everything they
+  every agent off. The old personal link `https://kurviq.com/mcp/<key>` is
+  refused (the agent is told to sign in). Agents find everything they
   need at <https://kurviq.com/llms.txt>.
   Images from the agent's machine (illustrations, screenshots): the agent
   uploads them with `curl --data-binary @image.png <upload address>` (from

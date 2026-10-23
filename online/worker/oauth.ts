@@ -6,8 +6,10 @@
 //   /.well-known/oauth-protected-resource[/mcp]  where to sign in (RFC 9728)
 //   /.well-known/oauth-authorization-server       the endpoints (RFC 8414)
 //   POST /oauth/register   a client registers itself (RFC 7591)
-//   GET  /oauth/authorize  the page that asks the user (it reads this browser's
-//                          agent key, which only Kurviq's own pages can read)
+//   GET  /mcp/oauth/authorize  the page that asks the user (it reads this
+//                          browser's agent key, which only Kurviq's own pages
+//                          can read); under /mcp, which the app's service
+//                          worker (also older ones) leaves to the network
 //   POST /oauth/approve    the page's "Allow": a one-time code for the client
 //   POST /oauth/token      code (+ PKCE) or refresh token -> tokens
 //
@@ -102,7 +104,7 @@ export const protectedResourceMetadata = (origin: string) => ({
 
 const authorizationServerMetadata = (origin: string) => ({
   issuer: origin,
-  authorization_endpoint: `${origin}/oauth/authorize`,
+  authorization_endpoint: `${origin}/mcp/oauth/authorize`,
   token_endpoint: `${origin}/oauth/token`,
   registration_endpoint: `${origin}/oauth/register`,
   response_types_supported: ["code"],
@@ -334,7 +336,8 @@ export const handleOAuth = async (request: Request, env: AuthEnv): Promise<Respo
     path.startsWith("/.well-known/oauth-protected-resource") ||
     path === "/.well-known/oauth-authorization-server" ||
     path === "/.well-known/openid-configuration" ||
-    path.startsWith("/oauth/");
+    path.startsWith("/oauth/") ||
+    path === "/mcp/oauth/authorize";
   if (!isOAuth) {
     return null;
   }
@@ -367,7 +370,7 @@ export const handleOAuth = async (request: Request, env: AuthEnv): Promise<Respo
     });
   }
 
-  if (path === "/oauth/authorize" && request.method === "GET") {
+  if ((path === "/mcp/oauth/authorize" || path === "/oauth/authorize") && request.method === "GET") {
     return authorizePage(url, env);
   }
 

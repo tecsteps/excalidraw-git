@@ -5,8 +5,8 @@
 //   /mcp             remote MCP for agents (scenes-mcp/tools.mjs), answered
 //                    through the pairing's open Kurviq tab; agents sign in
 //                    (OAuth, ./oauth.ts) and the user allows them in Kurviq
-//   /mcp/<key>       the old link with the key in the URL: only answered by
-//                    tabs whose user still allows it
+//   /mcp/<key>       the old link with the key in the URL: refused, the
+//                    agent is told to sign in
 //   /oauth/*, /.well-known/oauth-*  the sign-in (./oauth.ts)
 //   /llms.txt        how agents use Kurviq
 //   /api/public/…    public scenes, cached (./shared.ts)

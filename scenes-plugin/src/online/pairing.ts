@@ -3,12 +3,9 @@
 // Agents add https://kurviq.com/mcp and sign in: the user allows each one on
 // Kurviq's approval page, which reads this key (see online/worker/oauth.ts).
 // A new key ("Sign out all agents") cuts every agent off. The old way, the key
-// in the agent's URL (https://kurviq.com/mcp/<key>), works only while the
-// user allows it here.
+// in the agent's URL (https://kurviq.com/mcp/<key>), is refused.
 
 const KEY = "kurviq-agent-key";
-/** the old link (key in the URL, no sign-in) is answered by this browser's tabs */
-const LEGACY_KEY = "kurviq-agent-legacy-link";
 const listeners = new Set<() => void>();
 
 const makeKey = () => {
@@ -38,20 +35,8 @@ const write = (value: string | null) => {
   listeners.forEach((listener) => listener());
 };
 
-let legacyLink = (() => {
-  try {
-    return localStorage.getItem(LEGACY_KEY) === "1";
-  } catch {
-    return false;
-  }
-})();
-
-// another tab made or replaced the key (or changed the old-link setting)
+// another tab made or replaced the key
 window.addEventListener("storage", (event) => {
-  if (event.key === LEGACY_KEY) {
-    legacyLink = event.newValue === "1";
-    listeners.forEach((listener) => listener());
-  }
   if (event.key === KEY) {
     key = read();
     listeners.forEach((listener) => listener());
@@ -66,19 +51,6 @@ export const pairing = {
     };
   },
   getKey: () => key,
-  /** off (default): only signed-in agents are answered */
-  legacyLink: () => legacyLink,
-  setLegacyLink: (value: boolean) => {
-    legacyLink = value;
-    try {
-      if (value) {
-        localStorage.setItem(LEGACY_KEY, "1");
-      } else {
-        localStorage.removeItem(LEGACY_KEY);
-      }
-    } catch {}
-    listeners.forEach((listener) => listener());
-  },
   /** the key, made on first use */
   ensureKey: () => {
     if (!key) {
@@ -92,8 +64,6 @@ export const pairing = {
   remove: () => write(null),
   /** what agents add: they sign in there */
   mcpUrl: () => `${window.location.origin}/mcp`,
-  /** the old link, with the key */
-  legacyUrl: (value = key) => (value ? `${window.location.origin}/mcp/${value}` : null),
   liveUrl: (tab: string) =>
     key ? `${window.location.origin.replace(/^http/, "ws")}/live/${key}?tab=${encodeURIComponent(tab)}` : null,
 };

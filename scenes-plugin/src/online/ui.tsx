@@ -943,27 +943,6 @@ const CopyButton = ({ text, label }: { text: string; label: string }) => {
   );
 };
 
-/** the old link (key in the URL, no sign-in): off unless the user keeps it on */
-const LegacyLinkSetting = () => {
-  const on = useSyncExternalStore(pairing.subscribe, pairing.legacyLink);
-  const legacy = useSyncExternalStore(pairing.subscribe, pairing.legacyUrl);
-  return (
-    <details className="kq-small" open={on}>
-      <summary className="kq-muted">Old link without sign-in</summary>
-      <label className="kq-check">
-        <input type="checkbox" checked={on} onChange={(event) => pairing.setLegacyLink(event.target.checked)} />
-        Also answer agents that use the old link (key in the address)
-      </label>
-      <p className="kq-muted kq-small">
-        {on
-          ? "Anyone who has the old link can use your Kurviq while it is open, without asking you. Move your agents to the sign-in, then turn this off."
-          : "Off: agents with the old link are refused and told to sign in."}
-      </p>
-      {on && legacy && <CopyButton text={legacy} label="Copy old link" />}
-    </details>
-  );
-};
-
 const McpDialog = ({ onClose }: { onClose: () => void }) => {
   // the approval page reads this browser's key: made here if there is none yet
   usePairingKey() ?? pairing.ensureKey();
@@ -1021,7 +1000,6 @@ const McpDialog = ({ onClose }: { onClose: () => void }) => {
             Turn agent access off
           </button>
         </p>
-        <LegacyLinkSetting />
         <p className="kq-muted kq-small">
           How agents work with Kurviq:{" "}
           <a href="/llms.txt" target="_blank" rel="noopener">

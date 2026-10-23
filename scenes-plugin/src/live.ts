@@ -846,7 +846,7 @@ const tabState = () => {
     dirty,
     visible: document.visibilityState === "visible",
     focusedAt,
-    ...(IS_ONLINE ? { github: connection.isActive(), legacyLink: pairing.legacyLink() } : {}),
+    ...(IS_ONLINE ? { github: connection.isActive() } : {}),
   };
 };
 
@@ -950,8 +950,6 @@ const scheduleSocket = () => {
 /** (re)connect when the pairing key appears, changes or is removed */
 const followPairing = () => {
   if (pairing.getKey() === socketKey && socket) {
-    // the same key; maybe the old-link setting changed
-    report();
     return;
   }
   const old = socket;
