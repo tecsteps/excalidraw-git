@@ -189,6 +189,7 @@
     text-align: left;
     cursor: pointer;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 
     &:hover {
       background: var(--button-hover-bg, rgba(0, 0, 0, 0.06));

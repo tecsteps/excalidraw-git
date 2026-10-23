@@ -12,6 +12,13 @@
     flex: none;
   }
 
+  // Slides and MCP at the top right, before the sidebar button
+  .scenes-top-right {
+    display: flex;
+    gap: 0.5rem;
+    pointer-events: all;
+  }
+
   .scenes-pill__caret {
     margin-left: -0.1rem;
     color: var(--color-gray-50);

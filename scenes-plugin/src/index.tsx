@@ -11,6 +11,7 @@ import {
   save,
 } from "@excalidraw/excalidraw/components/icons";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import clsx from "clsx";
 
 import { IS_ONLINE, SCENE_NAME_RE } from "./api";
@@ -278,21 +279,6 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
         {offline && <span className="scenes-pill__offline" title="Offline — working locally">offline</span>}
         <span className="scenes-pill__caret" aria-hidden>▾</span>
       </button>
-      {!isMobile && (
-        <button
-          type="button"
-          className="scenes-pill scenes-slides-btn"
-          title="Slides: present this scene, edit the deck"
-          onClick={() => api?.toggleSidebar({ name: SLIDES_SIDEBAR_NAME })}
-        >
-          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
-            <rect x="2.5" y="3.5" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M10 13.5v3M6.5 16.5h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-          Slides
-        </button>
-      )}
-      {IS_ONLINE && !isMobile && <McpButton />}
       {open && (
         <SceneSwitcher
           onClose={() => setOpen(false)}
@@ -305,6 +291,40 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
     </div>
   );
 };
+
+/** Slides and MCP, at the top right (next to the sidebar button) */
+const ScenesTopRightUI = ({ isMobile }: { isMobile: boolean }) => {
+  const api = useExcalidrawAPI();
+  if (isMobile) {
+    return null;
+  }
+  return (
+    <div className="scenes-top-right">
+      <button
+        type="button"
+        className="scenes-pill scenes-slides-btn"
+        title="Slides: present this scene, edit the deck"
+        onClick={() => api?.toggleSidebar({ name: SLIDES_SIDEBAR_NAME })}
+      >
+        <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
+          <rect x="2.5" y="3.5" width="15" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M10 13.5v3M6.5 16.5h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+        Slides
+      </button>
+      {IS_ONLINE && <McpButton />}
+    </div>
+  );
+};
+
+/** the app's own `renderTopRightUI`, with Slides and MCP before what it shows (see ../vite.config.mts) */
+export const scenesTopRight =
+  (upstream: (isMobile: boolean, appState: any) => ReactNode) => (isMobile: boolean, appState: any) => (
+    <>
+      <ScenesTopRightUI isMobile={isMobile} />
+      {upstream(isMobile, appState)}
+    </>
+  );
 
 /**
  * Quick switch: the scenes as a dropdown under the pill. Type to filter,

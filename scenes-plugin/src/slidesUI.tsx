@@ -13,12 +13,14 @@ import { IS_ONLINE } from "./api";
 import { PresentationLink } from "./online/ui";
 import { presenter } from "./present";
 import { slideSorter } from "./slideSorter";
+import { setSlideParam } from "./router";
 import {
   addSlide,
   applyTheme,
   createTemplate,
   deleteSlides,
   duplicateSlides,
+  getSlides,
   getTemplate,
   getTheme,
   moveSlides,
@@ -55,6 +57,8 @@ const focusFrame = (id: string, select = true) => {
     api().updateScene({ appState: { selectedElementIds: { [id]: true } }, captureUpdate: CaptureUpdateAction.NEVER });
   }
   deck.setActive(id);
+  const number = getSlides(api().getSceneElements()).findIndex((slide) => slide.id === id) + 1;
+  setSlideParam(number || null);
 };
 
 const FONTS: Array<[string, number]> = [
@@ -219,6 +223,7 @@ const SlideList = () => {
     refocus.current = id;
     moveSlides(api(), [id], to);
     deck.setActive(id);
+    setSlideParam(to + 1);
   };
 
   const drop = (targetId: string) => {

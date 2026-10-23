@@ -24,12 +24,14 @@ const ICONS = {
   link: icon(p("M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71", "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71")),
   color: icon(p("m6 16 6-12 6 12", "M8 12h8")),
   highlight: icon(p("m9 11-6 6v3h9l3-3", "m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4")),
+  lineHeight: icon(p("M11 6h10", "M11 12h10", "M11 18h10", "m3 8 3-3 3 3", "m3 16 3 3 3-3", "M6 5v14")),
   clear: icon(p("M4 7V4h16v3", "M5 20h6", "M13 4 8 20", "m15 15 5 5", "m20 15-5 5")),
   chevron: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`,
 };
 
 const TEXT_COLORS = ["#1e1e1e", "#e03131", "#2f9e44", "#1971c2", "#f08c00", "#9c36b5", "#0c8599", "#868e96", "#ffffff"];
 const HIGHLIGHTS = ["#ffec99", "#ffc9c9", "#b2f2bb", "#a5d8ff", "#d0bfff", "#ffd8a8", "#e9ecef"];
+const LINE_HEIGHTS: Array<[string, number]> = [["Single", 1], ["1.15", 1.15], ["1.25 (default)", 1.25], ["1.5", 1.5], ["Double", 2]];
 const SIZES = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 96];
 
 export const createToolbar = (
@@ -234,6 +236,25 @@ export const createToolbar = (
       button("todo", `Checklist (${MOD}${SHIFT}9)`, ICONS.todo, () => api.toggleList("todo")),
       button("ol", `Numbered list (${MOD}${SHIFT}7)`, ICONS.ol, () => api.toggleList("ol")),
       button("ul", `Bulleted list (${MOD}${SHIFT}8)`, ICONS.ul, () => api.toggleList("ul")),
+      button("lineHeight", "Line spacing", ICONS.lineHeight, (anchor) =>
+        openPopover(anchor, (pop) => {
+          const current = api.state().lineHeight;
+          const list = ownerDocument.createElement("div");
+          list.className = "rt-toolbar__sizes";
+          for (const [label, value] of LINE_HEIGHTS) {
+            const item = ownerDocument.createElement("button");
+            item.type = "button";
+            item.className = `rt-toolbar__size${Math.abs(value - current) < 0.001 ? " rt-toolbar__size--active" : ""}`;
+            item.textContent = label;
+            item.addEventListener("click", () => {
+              api.setLineHeight(value);
+              closePopover();
+            });
+            list.appendChild(item);
+          }
+          pop.appendChild(list);
+        }),
+      ),
       sep(),
       button("link", `Link (${MOD}K)`, ICONS.link, openLink),
       button("color", "Text color", `${ICONS.color}<span class="rt-toolbar__bar"></span>`, (anchor) =>

@@ -54,6 +54,8 @@ export type RichEditorApi = {
     base: number;
     /** the size of the selection, in px (null: mixed) */
     size: number | null;
+    /** the text's line height (a factor of the font size) */
+    lineHeight: number;
   };
   setLink: (url: string | undefined) => void;
   toggleMark: (key: "b" | "i" | "u" | "s") => void;
@@ -61,6 +63,7 @@ export type RichEditorApi = {
   clearFormatting: () => void;
   toggleList: (kind: ParaKind) => void;
   stepSize: (direction: 1 | -1) => void;
+  setLineHeight: (value: number) => void;
   saveSelection: () => void;
   /** a popover field takes the focus: the editor stays open meanwhile */
   suspendBlur: () => void;
@@ -818,6 +821,7 @@ export const createRichEditable = (
         kinds: new Set(doc.p.slice(from.p, to.p + 1).map((para) => para.k)),
         collapsed,
         base,
+        lineHeight: latest().lineHeight,
       };
     },
     toggleMark,
@@ -826,6 +830,16 @@ export const createRichEditable = (
     toggleList,
     setLink,
     stepSize,
+    setLineHeight: (value: number) => {
+      const el = app.scene.getElement(element.id);
+      if (!el || el.lineHeight === value) {
+        return;
+      }
+      // the whole text (Excalidraw keeps one line height per element); measured again
+      app.scene.mutateElement(el, { lineHeight: value });
+      root.style.lineHeight = String(value);
+      emit();
+    },
     saveSelection: () => {
       readSelection();
     },

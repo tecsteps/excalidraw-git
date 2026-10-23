@@ -9,6 +9,8 @@ import { IS_ONLINE } from "./api";
 import { scenesController } from "./controller";
 import { connection } from "./online/github";
 import { isPublicScene, publicScene } from "./publicScene";
+import { deck } from "./deck";
+import { getSlides } from "./slides";
 
 /** /@owner/scene: someone's shared scene */
 const sharedFromPath = (): { owner: string; name: string } | null => {
@@ -101,6 +103,43 @@ const removeOldPublicCopies = async () => {
   } catch {}
 };
 
+/** ?slide=N: the slide picked last in the slide list, so the link can be bookmarked */
+export const setSlideParam = (number: number | null) => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("present") || publicScene.shown()) {
+    return;
+  }
+  if (number) {
+    params.set("slide", String(number));
+  } else {
+    params.delete("slide");
+  }
+  const query = params.toString();
+  const url = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+    window.history.replaceState(window.history.state, "", url);
+  }
+};
+
+/** a scene opened with ?slide=N shows that slide (once the scene is on the canvas) */
+const showSlideFromUrl = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const number = Number(params.get("slide"));
+  if (params.has("present") || !(number >= 1)) {
+    return;
+  }
+  for (let tries = 0; tries < 40; tries++) {
+    const api = deck.getApi();
+    const slide = api && getSlides(api.getSceneElements())[number - 1];
+    if (api && slide) {
+      api.setViewport({ target: slide, fit: "contain", offsets: { ui: true } });
+      deck.setActive(slide.id);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+};
+
 let connected = false;
 
 export const connectRouter = async () => {
@@ -140,6 +179,7 @@ export const connectRouter = async () => {
     await navigateTo(target);
   }
   syncUrl("replace");
+  showSlideFromUrl();
 
   // viewer closed: the URL goes back to the current scene (without the viewer's ?present / ?slide)
   publicScene.subscribe(() => {
@@ -160,6 +200,8 @@ export const connectRouter = async () => {
       return;
     }
     lastCurrent = current;
+    // another scene: the slide number was the last one's
+    setSlideParam(null);
     syncUrl("push");
   });
 

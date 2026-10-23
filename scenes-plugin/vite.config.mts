@@ -44,6 +44,7 @@ const readEnv = () => {
  * Hooks the scenes UI into excalidraw-app/App.tsx using public <Excalidraw/>
  * extension points only:
  *  - `renderTopLeftUI` prop  -> <ScenesTopLeftUI/>
+ *  - `renderTopRightUI` prop -> Slides / MCP buttons before the app's own
  *  - child <Sidebar/>         -> <ScenesSidebar/>
  * Fails loudly if upstream changes so the anchors no longer match.
  */
@@ -67,6 +68,11 @@ const injectScenesPlugin = () => ({
     if (!topRight.test(code)) {
       fail("anchor `renderTopRightUI={` not found");
     }
+    // the end of the app's renderTopRightUI arrow function (the prop after it)
+    const topRightEnd = /\}\}(\n\s*)onLinkOpen=\{/;
+    if (!topRightEnd.test(code)) {
+      fail("anchor `}}` + `onLinkOpen={` after renderTopRightUI not found");
+    }
     const sidebar = /<AppSidebar\s*\/>/;
     if (!sidebar.test(code)) {
       fail("anchor `<AppSidebar />` not found");
@@ -81,14 +87,15 @@ const injectScenesPlugin = () => ({
     }
     return {
       code:
-        `import { ScenesTopLeftUI, ScenesSidebar } from ${JSON.stringify(
+        `import { ScenesTopLeftUI, ScenesSidebar, scenesTopRight } from ${JSON.stringify(
           PLUGIN_ENTRY,
         )};\n` +
         code
           .replace(
             topRight,
-            "$1renderTopLeftUI={(isMobile) => <ScenesTopLeftUI isMobile={isMobile} />}$1renderTopRightUI={",
+            "$1renderTopLeftUI={(isMobile) => <ScenesTopLeftUI isMobile={isMobile} />}$1renderTopRightUI={scenesTopRight(",
           )
+          .replace(topRightEnd, "})}$1onLinkOpen={")
           .replace(sidebar, (match) => `${match}\n<ScenesSidebar />`)
           .replace(tabSync, "if (false /* excalidraw-scenes: tabs keep their own scene */) {"),
       map: null,
