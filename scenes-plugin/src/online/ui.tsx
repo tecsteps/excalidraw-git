@@ -918,7 +918,7 @@ const agentPrompt = (url: string) => `Connect to my Kurviq whiteboard as a remot
 
 ${url}
 
-- Claude Code: claude mcp add --transport http kurviq ${url} (then /mcp → kurviq → Authenticate)
+- Claude Code (all projects): claude mcp add --scope user --transport http kurviq ${url} (then /mcp → kurviq → Authenticate)
 - Codex: add to ~/.codex/config.toml: [mcp_servers.kurviq] url = "${url}", then run: codex mcp login kurviq
 - Claude Desktop / claude.ai: Settings → Connectors → Add custom connector → this URL
 - Other clients: add a remote MCP server with this URL

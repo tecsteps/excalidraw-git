@@ -5,7 +5,7 @@
 ## Connect an agent (MCP)
 
 1. Add `https://kurviq.com/mcp` as a remote MCP server (Streamable HTTP, OAuth sign-in):
-   - Claude Code: `claude mcp add --transport http kurviq https://kurviq.com/mcp`, then `/mcp` → kurviq → Authenticate
+   - Claude Code: `claude mcp add --scope user --transport http kurviq https://kurviq.com/mcp` (all projects), then `/mcp` → kurviq → Authenticate
    - Codex (`~/.codex/config.toml`): `[mcp_servers.kurviq]` with `url = "https://kurviq.com/mcp"`, then `codex mcp login kurviq`
    - Claude Desktop / claude.ai: Settings → Connectors → Add custom connector → the URL
    - Cursor and others: `{"mcpServers": {"kurviq": {"url": "https://kurviq.com/mcp"}}}`
