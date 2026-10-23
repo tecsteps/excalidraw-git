@@ -156,6 +156,17 @@ export const withSceneName = (json: string, name: string) => {
   return JSON.stringify({ ...data, appState: { ...(data.appState || {}), name } });
 };
 
+/** the files (image data) of these elements, nothing else */
+const usedFiles = (elements: readonly any[], files: Record<string, any>) => {
+  const used: Record<string, any> = {};
+  for (const el of elements) {
+    if (!el.isDeleted && el.fileId && files[el.fileId]) {
+      used[el.fileId] = files[el.fileId];
+    }
+  }
+  return used;
+};
+
 const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 const timestamp = () => {
@@ -1576,7 +1587,8 @@ class ScenesController {
     const mergedJson = JSON.stringify({
       ...mine,
       elements: merged.elements,
-      files: { ...(theirsData.files || {}), ...(mine.files || {}) },
+      // only the pictures the merged scene still uses (deleted images leave no data behind)
+      files: usedFiles(merged.elements, { ...(theirsData.files || {}), ...(mine.files || {}) }),
       kurviqFonts: mergeFontLists(mine.kurviqFonts, theirsData.kurviqFonts),
     });
     if (!(await unchanged())) {

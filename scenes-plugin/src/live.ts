@@ -38,7 +38,8 @@ import { layoutRich } from "./richText/layout";
 import { docFromMarkdown, plainOf } from "./richText/model";
 import { getCheckpoint, setCheckpoint } from "./storage";
 import { addFont, customFonts, fontFamilyValue, fontFromGoogle } from "./fonts";
-import { leanScene } from "./leanFiles";
+import { fillFiles, leanScene } from "./leanFiles";
+import { editsRunning, getPayload, keepPayload, onceForRequest } from "./agentRequests";
 import { keepUpload, withUploads } from "./uploads";
 import { createReceiver, sendMessage } from "./online/frames";
 import { OUTDATED_MESSAGE, checkServerBuild } from "./online/version";
@@ -59,7 +60,7 @@ type Command =
   | { type: "save"; name?: string }
   | { type: "local-only"; name: string; on: boolean }
   | { type: "convert"; elements: any[]; deck?: string }
-  | { type: "deck-check"; elements: any[]; deck: string; background?: string }
+  | { type: "deck-check"; elements: any[]; files?: Record<string, any>; deck: string; background?: string }
   | {
       type: "measure";
       items: Array<{ text: string; fontSize?: number; fontFamily?: number; lineHeight?: number; maxWidth?: number }>;
@@ -96,7 +97,12 @@ type Command =
   /** online: a request of the remote MCP to "the scenes server" (served by this tab) */
   | { type: "http"; request: import("./online/tabServer").TabRequest }
   | { type: "upload"; file: { id: string; mimeType: string; dataURL: string } }
-  | { type: "add-font"; name: string };
+  | { type: "add-font"; name: string }
+  /** online: a big edit an agent uploaded, kept until edit_scene names it */
+  | { type: "upload-payload"; payload: { id: string; json: string } }
+  | { type: "payload"; id: string }
+  /** the health check (app_status): through the same queues as edits and pictures */
+  | { type: "ping" };
 
 /** hidden headless tab started by the scenes server, only renders/converts */
 export const IS_RENDERER = new URLSearchParams(window.location.search).has(
@@ -394,7 +400,7 @@ const convertMcpElements = async (raw: any[], { deck }: { deck?: string } = {}) 
     // formatted text: measured as it shows (the converter measured it as
     // plain text); with `autoResize: false` it wraps at its width
     if (el.type === "text" && !el.containerId && el.customData?.rich) {
-      if (raw.autoResize === false && typeof raw.width === "number") {
+      if (raw.autoResize !== true && typeof raw.width === "number") {
         el.autoResize = false;
         el.width = raw.width;
         if (typeof raw.x === "number") {
@@ -403,8 +409,20 @@ const convertMcpElements = async (raw: any[], { deck }: { deck?: string } = {}) 
       }
       Object.assign(el, refreshTextDimensions(el, null, byId as any) || {});
     }
-    // text with a given width: aligned inside that box (the converter would
-    // treat x as the anchor of the alignment and shrink the box to the text)
+    // text with a given width: a box from x to x + width, its lines wrap at
+    // the width and textAlign aligns them inside it (the converter would treat
+    // x as the anchor of the alignment and shrink the box to the text)
+    if (el.type === "text" && !el.containerId && !el.customData?.rich && raw.autoResize !== true && typeof raw.width === "number" && raw.width > 0) {
+      el.autoResize = false;
+      el.width = raw.width;
+      if (typeof raw.x === "number") {
+        el.x = raw.x;
+      }
+      const { x: _x, y: _y, ...size } = refreshTextDimensions(el, null, byId as any) || ({} as any);
+      Object.assign(el, size, { width: raw.width });
+      continue;
+    }
+    // autoResize: true with a width: one line, aligned inside that box
     if (el.type === "text" && !el.containerId && el.autoResize !== false && typeof raw.width === "number" && typeof raw.x === "number") {
       if (el.textAlign === "center") {
         el.x = raw.x + (raw.width - el.width) / 2;
@@ -535,8 +553,14 @@ const status = () => {
       ? "offline"
       : sync.githubOnline
       ? "online"
-      : "unknown",
+      : sync.lastCheckedAt
+      ? "unknown"
+      : "checking (the first check with GitHub hasn't finished yet)",
     lastCheckedAt: sync.lastCheckedAt,
+    // the health of this tab: what it is working on (an edit or picture running for minutes is stuck)
+    busy: [...busy.values()].map(({ what, since }) => `${what} for ${Math.round((Date.now() - since) / 1000)} s`),
+    editsRunning: editsRunning(),
+    visible: document.visibilityState === "visible",
     // "name: status" — synced / ahead (not pushed) / behind / diverged / conflict / local
     scenes: list
       .filter((item) => item.name !== null)
@@ -548,15 +572,45 @@ const status = () => {
   };
 };
 
+/** app_status: right after the tab opened, wait a moment for its first GitHub check */
+const statusSettled = async () => {
+  for (let i = 0; i < 25 && !scenesController.getState().sync.lastCheckedAt && !scenesController.getState().sync.notConnected; i++) {
+    await sleep(200);
+  }
+  return status();
+};
+
 /**
  * Rendering and measuring share the exporter's state (fonts, image caches):
  * run them one at a time, else parallel calls can lose elements
  */
 const EXCLUSIVE = new Set(["render", "deck-check", "slides-html", "measure", "convert"]);
 let exclusiveQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * A task that never settles (a picture that never loads, a request that
+ * hangs) must not block every later one: the queue moves on after this long.
+ */
+const QUEUE_WATCHDOG_MS = 90_000;
+const settledOrLate = (run: Promise<unknown>) =>
+  Promise.race([run.catch(() => {}), new Promise((resolve) => setTimeout(resolve, QUEUE_WATCHDOG_MS))]);
+
+/** what runs right now (the health check reports it) */
+const busy = new Map<number, { what: string; since: number }>();
+let busySeq = 0;
+const tracked = async <T,>(what: string, task: () => Promise<T>): Promise<T> => {
+  const id = ++busySeq;
+  busy.set(id, { what, since: Date.now() });
+  try {
+    return await task();
+  } finally {
+    busy.delete(id);
+  }
+};
+
 const exclusive = <T,>(task: () => Promise<T>) => {
   const run = exclusiveQueue.then(task);
-  exclusiveQueue = run.catch(() => {});
+  exclusiveQueue = settledOrLate(run);
   return run;
 };
 
@@ -570,6 +624,11 @@ const refuseIfReadOnly = (name: string | null | undefined) => {
 
 /** the agent's edits of one scene must not overtake each other */
 let agentEdits: Promise<unknown> = Promise.resolve();
+const queueEdit = <T,>(task: () => Promise<T>) => {
+  const run = agentEdits.then(task);
+  agentEdits = settledOrLate(run);
+  return run;
+};
 
 /** a scene file (JSON) whose image elements may name uploaded files: they go into its files */
 const sceneJsonWithUploads = async (json: string) => {
@@ -640,27 +699,38 @@ const runCommand = async (command: Command) => {
       return scenesController.flush(command.name);
     case "scene-edit": {
       refuseIfReadOnly(command.name);
-      const run = agentEdits.then(() => editSceneOnGitHub(command, convertMcpElements));
-      agentEdits = run.catch(() => {});
+      const run = onceForRequest(
+        command.requestId,
+        () => queueEdit(() => editSceneOnGitHub(command, convertMcpElements)),
+        async () => JSON.parse((await scenesApi.load(command.name)).json).elements || [],
+      );
       if (IS_ONLINE) {
         // committed from this tab: no server announces it, sync right away
         run.then(() => scenesController.syncNow({ refresh: true })).catch(() => {});
       }
       return run;
     }
+    case "upload-payload":
+      return keepPayload(command.payload);
+    case "payload":
+      return { json: await getPayload(String(command.id || "")) };
+    case "ping":
+      // the health check: answered through the same queues as edits and pictures
+      return queueEdit(() => exclusive(async () => ({ pong: true })));
     case "http":
       return serveRequest(command.request);
     case "status":
-      return status();
+      return statusSettled();
     case "local-read": {
       const read = await readLocalScene(command);
       return (command as any).lean ? { ...read, file: leanScene(read.file) } : read;
     }
-    case "local-edit": {
-      const run = agentEdits.then(() => editLocalScene(command, convertMcpElements));
-      agentEdits = run.catch(() => {});
-      return run;
-    }
+    case "local-edit":
+      return onceForRequest(
+        (command as any).requestId,
+        () => queueEdit(() => editLocalScene(command, convertMcpElements)),
+        async () => JSON.parse(await scenesController.localOnlyJson(command.name)).elements || [],
+      );
     case "local-save":
       return saveLocalScene(command);
     case "local-only":
@@ -743,7 +813,11 @@ const runCommand = async (command: Command) => {
         convertMcpElements,
       );
     case "deck-check":
-      return checkDeck(restoreElements(command.elements, null, { repairBindings: true }), command);
+      return checkDeck(restoreElements(command.elements, null, { repairBindings: true }), {
+        ...command,
+        // pictures, for the contrast of text on them (filled in from this tab: reads are lean)
+        files: await fillFiles(command.files as any, scenesController.getApi()?.getFiles()),
+      });
     case "slides-html": {
       const elements = restoreElements(command.elements, null, { repairBindings: true });
       const frames = pickSlides(elements, command.slides ?? "all", { includeSkipped: command.includeSkipped });
@@ -789,7 +863,9 @@ const report = () => {
 const handleCommand = async (event: { id: string; command: Command }, reply: (payload: { ok: boolean; result?: unknown; error?: string }) => void) => {
   try {
     await scenesController.ready;
-    const result = await (EXCLUSIVE.has(event.command.type) ? exclusive(() => runCommand(event.command)) : runCommand(event.command));
+    const type = event.command.type;
+    const run = () => (EXCLUSIVE.has(type) ? exclusive(() => runCommand(event.command)) : runCommand(event.command));
+    const result = await (type === "status" ? run() : tracked(type, run));
     reply({ ok: true, result });
   } catch (error: any) {
     reply({ ok: false, error: error.message });

@@ -22,7 +22,7 @@ import {
   newElementWith,
   restoreElements,
 } from "@excalidraw/excalidraw";
-import { duplicateElements, measureText, syncInvalidIndices } from "@excalidraw/element";
+import { duplicateElements, measureText, refreshTextDimensions, syncInvalidIndices } from "@excalidraw/element";
 import { getFontString } from "@excalidraw/common";
 
 import type {
@@ -385,6 +385,15 @@ export const syncTemplate = (
     }
   });
 
+  // copies left behind by a deleted slide (or an older generation of slides) go too
+  const slideIds = new Set(slides.map((slide) => slide.id));
+  for (const el of elements) {
+    const data = slideData(el);
+    if (!el.isDeleted && data.copyOf && !(el.frameId && slideIds.has(el.frameId)) && !replaced.has(el.id)) {
+      replaced.set(el.id, newElementWith(el, { isDeleted: true, customData: { ...(el.customData || {}), slides: { ...data, removedBy: "sync" } } } as any));
+    }
+  }
+
   // new copies go to the bottom (backgrounds, headers under the slide's content)…
   let next = [...added, ...elements.map((el) => replaced.get(el.id) ?? el)];
   // …but above a slide's own full-size background, which would hide them
@@ -535,11 +544,16 @@ export const applyTheme = (
     return null;
   }
   // texts whose font or size changed need new dimensions
-  const ids = new Set(next.filter((el, i) => el !== elements[i] && el.type === "text").map((el) => el.id));
-  const refreshed = new Map(
-    restoreElements(next.filter((el) => ids.has(el.id)), next, { refreshDimensions: true }).map((el) => [el.id, el]),
-  );
-  return next.map((el) => refreshed.get(el.id) ?? el);
+  // (bound text: measured against its shape)
+  const map = new Map(next.map((el) => [el.id, el])) as any;
+  return next.map((el, i) => {
+    if (el === elements[i] || el.type !== "text") {
+      return el;
+    }
+    const text = el as any;
+    const container = text.containerId ? map.get(text.containerId) ?? null : null;
+    return { ...el, ...(refreshTextDimensions(text, container, map, text.originalText ?? text.text) || {}) } as ExcalidrawElement;
+  });
 };
 
 /** the editor's defaults for new elements, from the theme */

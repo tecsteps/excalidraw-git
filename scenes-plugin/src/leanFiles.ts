@@ -31,7 +31,7 @@ export const leanScene = <T extends { files?: Record<string, any> }>(data: T): T
     if (file?.dataURL) {
       remember(file);
     }
-    files[id] = { id: file?.id ?? id, mimeType: file?.mimeType, lean: true };
+    files[id] = { id: file?.id ?? id, mimeType: file?.mimeType, lean: true, size: file?.dataURL?.length ?? 0 };
   }
   return { ...data, files };
 };
