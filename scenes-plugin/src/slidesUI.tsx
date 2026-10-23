@@ -2,7 +2,7 @@
 // per-slide settings, reveal steps, and the deck's template + style.
 
 import { CaptureUpdateAction, FONT_FAMILY, Sidebar, newElementWith } from "@excalidraw/excalidraw";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 
 import { scenesController } from "./controller";
@@ -21,6 +21,7 @@ import {
   duplicateSlides,
   getTemplate,
   getTheme,
+  moveSlides,
   patchSlideData,
   setSlideOrder,
   slideData,
@@ -196,6 +197,29 @@ const SlideList = () => {
   const { slides, thumbs, activeId } = useDeck();
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  /** the slide moved with the keyboard: its card keeps the focus after the list re-orders */
+  const refocus = useRef<string | null>(null);
+
+  useEffect(() => {
+    const id = refocus.current;
+    const button = id && document.querySelector<HTMLElement>(`[data-slide-open="${CSS.escape(id)}"]`);
+    if (button) {
+      refocus.current = null;
+      button.focus();
+      button.scrollIntoView({ block: "nearest" });
+    }
+  }, [slides]);
+
+  /** ↑ / ↓ on a slide: one place up or down in the deck */
+  const moveBy = (id: string, delta: number) => {
+    const to = slides.findIndex((s) => s.id === id) + delta;
+    if (to < 0 || to >= slides.length) {
+      return;
+    }
+    refocus.current = id;
+    moveSlides(api(), [id], to);
+    deck.setActive(id);
+  };
 
   const drop = (targetId: string) => {
     if (!dragId || dragId === targetId) {
@@ -261,7 +285,21 @@ const SlideList = () => {
               ×
             </button>
           </span>
-          <button type="button" className="slides-card__open" onClick={() => focusFrame(slide.id)} title="Show this slide">
+          <button
+            type="button"
+            className="slides-card__open"
+            data-slide-open={slide.id}
+            onClick={() => focusFrame(slide.id)}
+            onKeyDown={(event) => {
+              if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.altKey && !event.metaKey && !event.ctrlKey) {
+                // not the canvas's arrow keys (they would nudge the selected frame)
+                event.preventDefault();
+                event.stopPropagation();
+                moveBy(slide.id, event.key === "ArrowUp" ? -1 : 1);
+              }
+            }}
+            title="Show this slide (↑ / ↓ moves it in the deck)"
+          >
             <span className="slides-card__num">{slide.index + 1}</span>
             <span className="slides-card__thumb">{thumbs[slide.id] ? <img src={thumbs[slide.id]} alt="" /> : null}</span>
             <span className="slides-card__meta">
@@ -556,7 +594,7 @@ export const SlidesSidebar = () => {
         {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
         {!slides.length ? (
           <p className="slides-hint">
-            Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them, or open “Sort” for all slides at once.
+            Every frame on the canvas is a slide. Add one with “+ Slide”, or draw frames with the frame tool (F). Drag slides here to reorder them (or click one and press ↑ / ↓), or open “Sort” for all slides at once.
           </p>
         ) : (
           <SlideList />
