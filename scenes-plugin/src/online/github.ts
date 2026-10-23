@@ -567,22 +567,12 @@ const fetchScenes = async (force = false) => {
 };
 
 /** where a scene lives (new scenes: the private repository) */
-/**
- * What this tab committed itself in the last moments. Right after a commit
- * GitHub may still list the previous version for a few seconds: reads then
- * get the version just written, not the one before it.
- */
-const ownWrites = new Map<string, { sha: string; at: number }>();
-const OWN_WRITE_MS = 30_000;
-
 const locate = async (name: string, force = true) => {
   const { repo, main, pub } = await fetchScenes(force);
-  const own = ownWrites.get(name);
-  const fresh = own && Date.now() - own.at < OWN_WRITE_MS ? own.sha : undefined;
   if (!main.blobs.has(name) && pub?.blobs.has(name) && publicRepo) {
-    return { repo: publicRepo, listing: pub, sha: fresh ?? pub.blobs.get(name), isPublic: true };
+    return { repo: publicRepo, listing: pub, sha: pub.blobs.get(name), isPublic: true };
   }
-  return { repo, listing: main, sha: (main.blobs.has(name) ? fresh : undefined) ?? main.blobs.get(name), isPublic: false };
+  return { repo, listing: main, sha: main.blobs.get(name), isPublic: false };
 };
 
 const checkBase = (name: string, current: string | undefined, baseSha: string | undefined) => {
@@ -729,11 +719,9 @@ export const githubScenes = {
       const res = await putFile(repo, path, bytes, commitMessage(`${current ? "Update" : "Add"} scene: ${name}`, source), current);
       if (res.status === 200 || res.status === 201) {
         listings.delete(repoKey(repo));
-        ownWrites.set(name, { sha: res.data.content.sha as string, at: Date.now() });
         return { sha: res.data.content.sha as string, commit: res.data.commit.sha as string, changed: true };
       }
       // someone pushed between our listing and the commit: look again
-      ownWrites.delete(name);
       if ((res.status === 409 || res.status === 422) && attempt < 2) {
         continue;
       }
@@ -757,7 +745,6 @@ export const githubScenes = {
       const res = await deleteFile(repo, path, `Delete scene: ${name}`, current);
       if (res.status === 200) {
         listings.delete(repoKey(repo));
-        ownWrites.delete(name);
         return { sha: null };
       }
       if ((res.status === 409 || res.status === 422) && attempt < 2) {
@@ -820,8 +807,6 @@ export const githubScenes = {
       });
       if (ref.status === 200) {
         listings.delete(repoKey(repo));
-        ownWrites.delete(from);
-        ownWrites.delete(to);
         return { sha, commit: next.data.sha };
       }
       // the branch moved meanwhile (not a fast-forward): try again on top

@@ -69,22 +69,7 @@ you.
 - `update`: `[{ "id": "...", ...props }]`: move (`x`, `y`), resize, recolor,
   change `text` of a text element (a shape's label is a text element with
   `containerId` = the shape id).
-- `delete`: ids (a shape's label goes with it; a deleted slide frame takes
-  everything on it along, template copies included, like in the editor).
-- Layer order: `"zIndex": "front"` / `"back"` (above / below everything else
-  on its slide) or `"above"` / `"below": "<element id>"`, in `update` or on
-  added elements (e.g. a label added after a picture: `"zIndex": "front"`).
-- Ids: ids of deleted elements can be used again. `upsert: true` lets `add`
-  replace existing elements with the same id (instead of an error).
-- Changing `fontFamily` / `fontSize` of a text measures it again. A free text
-  with `width` is a box from `x` to `x + width`: its lines wrap at the width
-  and `textAlign` aligns them inside (`"autoResize": true` instead: one line,
-  aligned in that box).
-- Retries are safe: every edit has a `requestId` (yours, or the one the
-  result names). Sent again with the same `requestId`, an edit that already
-  landed is not applied twice (`alreadyApplied` in the result). After a
-  timeout, retry with the same `requestId`; `app_status` → `health` shows
-  whether the user's app is busy.
+- `delete`: ids (a shape's label goes with it).
 - Label an existing shape: add `{ "type": "text", "id": "...", "text": "...",
   "containerId": "<shape id>" }`; it is centered automatically.
 - Labels (`label: { text, strokeColor, fontSize, … }`) are dark (#1e1e1e)
@@ -103,22 +88,6 @@ you.
 - **Big edits:** write `{ "add": [...], "update": [...], "delete": [...] }` to
   a JSON file and pass `file: "/abs/path.json"` (`save_scene`:
   `elementsFile`) instead of pasting it into the call.
-
-## Limits
-
-- Per call: at most 20 images fetched (`src` / `icon`; uploaded `fileId`s
-  don't count), 200 items in `measure_text`.
-- Selections return at most 150 elements; change reports give details for
-  25 elements per kind, the rest as ids.
-- Slide numbers (`"slide": 3`, `view_scene(slide: 3)`) count in deck order
-  as it is at that moment, after the deletions of the same edit: they shift
-  when slides are deleted, added or moved. Address slides by frame id
-  (`"slide": "s12"`) in edits; the result's `slideNumbers` says which frame
-  each number hit.
-- Coordinates: `read_scene` gives scene coordinates; with `relative: true`,
-  elements on a slide get `x` / `y` from the slide's corner plus
-  `"slide": "<frame id>"`, the form edits take. `read_scene(name, slide: 3)`
-  gives one slide's elements.
 
 ## Formatted text (bold, lists, colors in one text)
 
@@ -208,11 +177,10 @@ Every frame of a scene is a slide; the user presents with the "Slides" button
   (today, in the viewer's locale). They are filled in only in template
   elements. Never edit the copies (ids `<element>~<slide>`); change the
   template instead.
-- Text alignment: give a text `width` and it becomes a box from `x` to
-  `x + width`: lines wrap at the width and `textAlign` (left, center, right)
-  aligns them inside it (e.g. a caption centered under a shape, a paragraph).
-  Without `width`, `x` is the left edge, the center or the right edge,
-  following `textAlign`.
+- Text alignment: give a text `width` and its `textAlign` (left, center,
+  right) aligns it inside the box from `x` to `x + width` (e.g. a caption
+  centered under a shape). Without `width`, `x` is the left edge, the
+  center or the right edge, following `textAlign`.
 - Closed, filled lines (area charts, outlines): `"type": "line"` with the
   last point equal to the first, `"polygon": true` and a `backgroundColor`.
 - Fonts: besides Excalidraw's own (`fontFamily` 5 Excalifont, 6 Nunito,
@@ -224,19 +192,8 @@ Every frame of a scene is a slide; the user presents with the "Slides" button
   `customFonts`. Font files (not on Google Fonts) are added by the user:
   font picker → "Add font…" → Font file.
 - Theme: in a deck, text (and labels) without `fontFamily` / `strokeColor`
-  get the theme's font and text color, and follow when the theme changes.
-  Use the theme's `titleSize` / `bodySize` for titles and body. Change the
-  deck style by updating the template frame's `customData.slides.theme`:
-  elements that still have the old theme's values follow; with
-  `restyle: true` on that edit (or any edit), every slide element takes the
-  theme's font, colors, roughness and stroke, also where they were set by
-  hand (font sizes stay).
-- A neutral, modern look (instead of the hand-drawn default): theme
-  `{ "fontFamily": "Inter", "textColor": "#111827", "strokeColor": "#334155",
-  "roughness": 0, "strokeWidth": 2, "fillStyle": "solid", "titleSize": 72,
-  "bodySize": 36 }`, white or `#f8fafc` slides, one accent color (e.g.
-  `#2563eb`), fills like `#e0e7ff` / `#f1f5f9`, and `"roughness": 0` on
-  shapes. Excalidraw's palette in `read_me` is hand-drawn-sketch style.
+  get the theme's font and text color, and follow when the user changes the
+  deck style. Use the theme's `titleSize` / `bodySize` for titles and body.
   Make slides visual: shapes, arrows, icons, sticky notes (`"type":
   "stickynote"` with `label`), crow's-foot ER diagrams, hand-drawn charts;
   not just bullet text.
@@ -255,10 +212,7 @@ Every frame of a scene is a slide; the user presents with the "Slides" button
   overlapping, overflowing, too small or low-contrast text, elements not
   part of their slide, broken click steps and missing notes.
   `view_scene(name, slide: 3)` shows slide 3 exactly as presented (template
-  included); add `step: 1` to see it after the first click. Text on a
-  picture is checked against the picture's colors under it. Intended
-  findings can be silenced on the element: `"customData": { "slides":
-  { "ignore": ["clipped", "overlap"] } }` (finding kinds, or `true`).
+  included); add `step: 1` to see it after the first click.
   `view_scene(name, slides: "all")` shows the whole deck in one image
   (`steps: true`: every click state).
 - `measure_text(items)` tells you how wide and tall text will be (and how it

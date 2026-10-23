@@ -21,7 +21,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { convertInNode, needsConversion } from "./convert.mjs";
 import { markdownOfElement } from "./richText.mjs";
-import { byIds, commonBounds, deckOrder, diffElements, findSlide, inRegion, summarize, toRect } from "./inspect.mjs";
+import { byIds, commonBounds, diffElements, inRegion, summarize, toRect } from "./inspect.mjs";
 import { readEditFile, resolveImages } from "./media.mjs";
 
 /** get_scene returns an overview instead of all elements above this size */
@@ -62,15 +62,7 @@ export const createScenesMcp = ({
    * pictures)
    */
   leanReads = false,
-  /**
-   * the server can read the agent's files (edit files, image src paths, PDF
-   * output); Kurviq online can't, so those options aren't offered there
-   */
-  localFiles = true,
-  /** Kurviq online: where agents upload images and big edits (payloadId) */
-  uploadUrl = null,
 }) => {
-  const LOCAL_FILES = !!localFiles;
   const APP_HINT = appHint;
   const MODE = mode;
 
@@ -333,22 +325,13 @@ export const createScenesMcp = ({
     .optional()
     .describe("Overview: the labels are paged (100 per call); pass the offset the previous answer names to get the next ones");
 
-  /** elements on a slide get x / y relative to its top-left corner (and "slide": its frame id), as edits take them */
-  const relativeToSlides = (picked, all) => {
-    const frames = new Map(all.filter((el) => el.type === "frame" || el.type === "magicframe").map((el) => [el.id, el]));
-    return picked.map((el) => {
-      const frame = el.frameId && frames.get(el.frameId);
-      return frame ? { ...el, slide: frame.id, x: el.x - frame.x, y: el.y - frame.y } : el;
-    });
-  };
-
   /** element data for a region / elementIds selection, capped */
-  const selection = (elements, { region, elementIds, relative }) => {
+  const selection = (elements, { region, elementIds }) => {
     const picked = elementIds?.length ? byIds(elements, elementIds) : inRegion(elements, region);
     return {
       selected: picked.length,
       bounds: toRect(commonBounds(picked)),
-      elements: compact((relative ? relativeToSlides(picked, elements) : picked).slice(0, MAX_SELECTED)),
+      elements: compact(picked.slice(0, MAX_SELECTED)),
       ...(picked.length > MAX_SELECTED
         ? { more: `${picked.length - MAX_SELECTED} more elements in this selection: use a smaller region or elementIds` }
         : {}),
@@ -359,15 +342,8 @@ export const createScenesMcp = ({
    * add / update / delete of an edit, from the arguments and/or a JSON file;
    * image elements (src / svg / icon) become image elements + files
    */
-  /** an edit the agent uploaded (kept by the user's tab), like an edit file */
-  const payloadEdit = async (id) => {
-    const { json } = await appCommand({ type: "payload", id });
-    const data = JSON.parse(json);
-    return Array.isArray(data) ? { add: data } : data;
-  };
-
-  const editInput = async ({ add, update, delete: remove, file, payloadId }) => {
-    const fromFile = file ? await readEditFile(file) : payloadId ? await payloadEdit(payloadId) : {};
+  const editInput = async ({ add, update, delete: remove, file }) => {
+    const fromFile = file ? await readEditFile(file) : {};
     let addElements = [];
     for (const source of [add, fromFile.add]) {
       if (!source) {
@@ -384,7 +360,7 @@ export const createScenesMcp = ({
     const updates = [...(update || []), ...(fromFile.update || [])];
     const deletes = [...(remove || []), ...(fromFile.delete || [])];
     if (!elements.length && !updates.length && !deletes.length) {
-      throw new Error("Nothing to do: pass add, update and/or delete (or an uploaded payloadId / a file with them)");
+      throw new Error("Nothing to do: pass add, update and/or delete (or a file with them)");
     }
     return { add: elements, update: updates, delete: deletes, files };
   };
@@ -394,32 +370,8 @@ export const createScenesMcp = ({
     .optional()
     .describe('Absolute path of a JSON file with { "add": [...], "update": [...], "delete": [...] } (or just an array = add). Use it for big edits instead of pasting JSON.');
 
-  const PAYLOAD_ID = z
-    .string()
-    .optional()
-    .describe(`An edit you uploaded: { "add": [...], "update": [...], "delete": [...] } (or an array = add) as JSON, POSTed with curl --data-binary @edit.json ${uploadUrl ?? "<agent link>/upload"} (answers with its payloadId). Use it for big edits instead of pasting JSON.`);
-
-  /** where big edits come from: a local file, or (online) an upload */
-  const EDIT_SOURCE = LOCAL_FILES ? { file: EDIT_FILE } : { payloadId: PAYLOAD_ID };
-  const BIG_EDITS = LOCAL_FILES
-    ? "Big edits: put them in a JSON file and pass file (absolute path)."
-    : `Big edits: upload the JSON ({ "add", "update", "delete" }) with curl --data-binary @edit.json ${uploadUrl ?? "<agent link>/upload"} and pass the payloadId it answers (nothing passes through your context twice).`;
-
-  const IMAGES_HELP = `Images and icons: add { "type": "image", "id": "...", "x": 0, "y": 0, "width": 48, plus ONE of "src" (${LOCAL_FILES ? "absolute file path, " : ""}http(s) URL or data URL of a png/jpg/gif/webp/svg), "svg" (inline SVG markup) or "icon" ("lucide:<name>", e.g. "lucide:database", or "simple-icons:<slug>", e.g. "simple-icons:github"; "color" tints it)${LOCAL_FILES ? "" : ', or "fileId" of an image you uploaded (read_me: "Images from your machine")'} }. width or height alone keeps the aspect ratio. At most 20 images fetched per call (src / icon; uploaded fileIds don't count).
+  const IMAGES_HELP = `Images and icons: add { "type": "image", "id": "...", "x": 0, "y": 0, "width": 48, plus ONE of "src" (absolute file path, http(s) URL or data URL of a png/jpg/gif/webp/svg), "svg" (inline SVG markup) or "icon" ("lucide:<name>", e.g. "lucide:database", or "simple-icons:<slug>", e.g. "simple-icons:github"; "color" tints it), or (Kurviq online) "fileId" of an image you uploaded (read_me: "Images from your machine") }. width or height alone keeps the aspect ratio.
   Labels: label { text, strokeColor, fontSize, fontFamily, textAlign, verticalAlign } — the text is dark (#1e1e1e) unless you set strokeColor; the label's id is "<shape id>-label"; a shape grows so that no word of its label is broken.`;
-
-  /** what an edit reports besides added / updated / deleted */
-  const EDIT_EXTRAS = ["alreadyApplied", "slideNumbers", "alsoDeleted", "replaced", "restyled", "layerProblems", "imagesRepaired", "imagesWithoutFile", "sceneFile"];
-  const editExtras = (edited) =>
-    Object.fromEntries(EDIT_EXTRAS.filter((key) => edited?.[key] !== undefined).map((key) => [key, edited[key]]));
-
-  /** options of edit_scene / edit_open_scene beyond add / update / delete */
-  const EDIT_HELP = `  - Layer order: in update (or on added elements) "zIndex": "front" | "back" (above / below everything else on its slide) or "above" / "below": "<element id>".
-  - upsert: true lets add reuse ids of existing elements (they are replaced). Ids of deleted elements can always be used again.
-  - Deleting a slide (frame) deletes everything on it, template copies included (like in the editor).
-  - "slide": n counts slides in deck order AS IT IS NOW, after this edit's deletions: numbers shift when slides are deleted or moved. Prefer frame ids ("slide": "q12"); the result's slideNumbers says which frame each number hit.
-  - Changing fontFamily / fontSize of a text measures it again (a box with "autoResize": false keeps its width and re-wraps). A free text with "width" wraps at that width; textAlign aligns inside x … x + width.
-  - Deck theme: updating the template frame's customData.slides.theme re-applies it to slide elements that still had the old theme's values; restyle: true applies it to every slide element, also over fonts / colors set by hand (font sizes stay).`;
 
   const registerSceneTools = (server) => {
     server.registerTool(
@@ -493,59 +445,16 @@ export const createScenesMcp = ({
     // co-working on the scene open in the user's app
     // ---------------------------------------------------------------------------
 
-    /** element data for a (possibly huge) scene, honoring summary/region/elementIds/slide */
-    const sceneView = (elements, { summary, region, elementIds, textsOffset, slide, relative }, defaultSummary) => {
-      const relativeNote = relative ? { coordinates: 'x / y of elements on a slide count from its top-left corner ("slide": its frame id): pass them back the same way' } : {};
-      if (slide !== undefined) {
-        const frame = findSlide(elements, slide);
-        if (!frame) {
-          throw new Error(`slide ${JSON.stringify(slide)}: no such slide (the deck has ${deckOrder(elements).length}; use a number from 1, a frame id or "template")`);
-        }
-        const on = elements.filter((el) => el.frameId === frame.id && !el.customData?.slides?.copyOf);
-        const copies = elements.filter((el) => el.frameId === frame.id && el.customData?.slides?.copyOf).length;
-        const number = deckOrder(elements).findIndex((f) => f.id === frame.id) + 1;
-        const picked = relative ? relativeToSlides(on, elements) : on;
-        return {
-          slide: { ...(number ? { number } : { template: true }), id: frame.id, name: frame.name ?? null, ...toRect(commonBounds([frame])) },
-          ...(frame.customData?.slides ? { slideData: frame.customData.slides } : {}),
-          selected: on.length,
-          elements: compact(picked.slice(0, MAX_SELECTED)),
-          ...(on.length > MAX_SELECTED ? { more: `${on.length - MAX_SELECTED} more elements on this slide: use elementIds or region` } : {}),
-          ...(copies ? { templateCopies: `${copies} template copies on this slide (not listed)` } : {}),
-          ...relativeNote,
-        };
-      }
+    /** element data for a (possibly huge) scene, honoring summary/region/elementIds */
+    const sceneView = (elements, { summary, region, elementIds, textsOffset }, defaultSummary) => {
       if (elementIds?.length || region) {
-        return { ...selection(elements, { region, elementIds, relative }), ...relativeNote };
+        return selection(elements, { region, elementIds });
       }
       if (summary ?? defaultSummary) {
         return summarize(elements, { textsOffset });
       }
-      return { sceneBounds: toRect(commonBounds(elements)), elements: compact(relative ? relativeToSlides(elements, elements) : elements), ...relativeNote };
+      return { sceneBounds: toRect(commonBounds(elements)), elements: compact(elements) };
     };
-
-    /** how big a scene's file is, from its files (lean reads keep each picture's size) */
-    const fileStats = (file) => {
-      const files = Object.values(file?.files || {});
-      if (!files.length) {
-        return {};
-      }
-      const used = new Set((file.elements || []).filter((el) => !el.isDeleted && el.fileId).map((el) => el.fileId));
-      const bytes = files.reduce((sum, f) => sum + (f?.size ?? f?.dataURL?.length ?? 0), 0);
-      const unused = files.filter((f) => f?.id && !used.has(f.id)).length;
-      return {
-        sceneFile: `${files.length} pictures, ${(bytes / 1024 / 1024).toFixed(1)} MB of image data${unused ? ` (${unused} no longer used: dropped with the next edit)` : ""}`,
-      };
-    };
-
-    const SLIDE_FILTER = z
-      .union([z.number(), z.string()])
-      .optional()
-      .describe('Only the elements of this slide: number (deck order), frame id or "template" (template copies left out)');
-    const RELATIVE = z
-      .boolean()
-      .optional()
-      .describe('x / y of elements on a slide relative to its top-left corner (with "slide": frame id), as edits take them');
 
     /** render via the app (or the hidden renderer) → MCP image content */
     const renderImage = async (command, { userTab = false } = {}) => {
@@ -591,15 +500,9 @@ export const createScenesMcp = ({
       const { added, modified, deleted } = diffElements(before, after);
       const changedIds = [...added, ...modified.map((m) => m.element)].map((el) => el.id);
       const count = added.length + modified.length + deleted.length;
-      const isFrame = (el) => el?.type === "frame" || el?.type === "magicframe";
       return {
         count,
         changedIds,
-        // slides added, deleted or moved: slide numbers may mean other slides now
-        framesChanged:
-          added.some(isFrame) ||
-          deleted.some(isFrame) ||
-          modified.some(({ element, changedFields }) => isFrame(element) && changedFields.some((f) => ["x", "y", "customData"].includes(f))),
         report: {
           summary: count
             ? `${added.length} added, ${modified.length} modified, ${deleted.length} deleted ${sinceText}`
@@ -738,8 +641,7 @@ export const createScenesMcp = ({
     - update: [{ "id": "...", ...props }] partial updates of existing elements, e.g. move (x, y), resize, recolor, change "text" of a text element. Like in the editor, a moved / resized shape takes its label and bound arrows along, and a moved frame (slide) takes everything on it. A shape's label: { "id": "box", "label": { "text": "…", "fontSize": 28 } } (changes it or adds one; it is re-wrapped and the shape grows to fit).
     - delete: ids to remove (a container's label goes with it).
     - To label an EXISTING shape, add a text element with "containerId": "<shape id>" (it gets centered in the shape).
-  ${EDIT_HELP}
-    ${BIG_EDITS}
+    Big edits: put them in a JSON file and pass file (absolute path).
   ${IMAGES_HELP}
   Returns an IMAGE of the edited area (view=false to skip). Nothing is applied if the user switched to another scene since your last read (or pass expectScene explicitly).`,
           inputSchema: {
@@ -753,14 +655,12 @@ export const createScenesMcp = ({
               .string()
               .optional()
               .describe("The scene you are co-working on (as returned by read_open_scene) — routes the edit to the tab showing it; nothing is applied if no tab shows it"),
-            ...EDIT_SOURCE,
-            upsert: z.boolean().optional().describe("add with the id of an existing element replaces that element"),
-            restyle: z.boolean().optional().describe("Deck: apply the deck theme to every slide element, also over fonts / colors set by hand"),
+            file: EDIT_FILE,
             view: z.boolean().optional().describe("Return an IMAGE of the edited area (default true)"),
           },
         },
-        tool(async ({ add, update, delete: remove, file, payloadId, expectScene, upsert, restyle, view = true }) => {
-          const edit = await editInput({ add, update, delete: remove, file, payloadId });
+        tool(async ({ add, update, delete: remove, file, expectScene, view = true }) => {
+          const edit = await editInput({ add, update, delete: remove, file });
 
           // what did the user do since an agent last looked?
           const before = await appCommand({
@@ -779,8 +679,6 @@ export const createScenesMcp = ({
             ...(edit.update.length ? { update: edit.update } : {}),
             ...(edit.delete.length ? { delete: edit.delete } : {}),
             ...(Object.keys(edit.files).length ? { files: edit.files } : {}),
-            ...(upsert ? { upsert } : {}),
-            ...(restyle ? { restyle } : {}),
             storeBaseline: "edit",
             revision,
           });
@@ -799,7 +697,6 @@ export const createScenesMcp = ({
             addedIds: info.addedIds,
             updated: info.updated,
             deleted: info.deleted,
-            ...editExtras(info),
             ...(info.missingIds ? { missingIds: info.missingIds } : {}),
             revision,
             note:
@@ -910,7 +807,7 @@ export const createScenesMcp = ({
         {
           description: `Read a scene and find out what the USER changed since an agent last edited it. You work on your own copy (a headless Excalidraw), never in the user's browser: before reading, the user's app is asked to push its unpushed changes of this scene, so you see their latest work.
   userChanges lists what changed (added / modified with changedFields / deleted) since the last agent edit of this scene (found in the git history), or since revision=<since> if you pass one. The result has a "revision": pass it as basedOn to edit_scene, or as since to the next read_scene, to get exactly what changed in between. view=true adds an IMAGE of the user's changes (or of the scene).
-  Scene data: summary=true (default above ${SUMMARY_THRESHOLD} elements) gives an overview (bounds, counts, slides in deck order, all text labels with positions); slide = one slide's elements (number, frame id or "template"); region / elementIds give element data for a part; otherwise all elements. relative=true gives x / y of elements on a slide relative to the slide, as edits take them with "slide". changesOnly=true skips the scene data. sceneFile tells how big the file is (pictures).`,
+  Scene data: summary=true (default above ${SUMMARY_THRESHOLD} elements) gives an overview (bounds, counts, frames, all text labels with positions); region / elementIds give element data for a part; otherwise all elements. changesOnly=true skips the scene data.`,
           inputSchema: {
             name: SCENE_NAME,
             view: z.boolean().optional().describe("Also return an IMAGE: of the user's changes, or of the scene"),
@@ -919,13 +816,11 @@ export const createScenesMcp = ({
             textsOffset: TEXTS_OFFSET,
             region: REGION.optional(),
             elementIds: z.array(z.string()).optional(),
-            slide: SLIDE_FILTER,
-            relative: RELATIVE,
             since: z.string().optional().describe("A revision returned earlier: report changes since then"),
           },
           annotations: { readOnlyHint: true },
         },
-        tool(async ({ name, view, changesOnly, summary, region, elementIds, slide, relative, since, textsOffset }) => {
+        tool(async ({ name, view, changesOnly, summary, region, elementIds, since, textsOffset }) => {
           const flushed = await flushUser(name);
           const local = isLocalOnly(flushed);
           const current = local ? await localVersion(name, since) : await loadSceneWithSha(name, { lean: true });
@@ -939,11 +834,10 @@ export const createScenesMcp = ({
             revision: current.sha,
             sync: local ? LOCAL_NOTE : userSyncNote(flushed),
             elementCount: elements.length,
-            ...fileStats(current.file),
             userChanges: changes.firstLook
               ? "No earlier agent edit of this scene found — everything is new to you. From your first edit on, the user's changes are reported."
               : changes.report,
-            ...(changesOnly ? {} : sceneView(elements, { summary, region, elementIds, textsOffset, slide, relative }, elements.length > SUMMARY_THRESHOLD)),
+            ...(changesOnly ? {} : sceneView(elements, { summary, region, elementIds, textsOffset }, elements.length > SUMMARY_THRESHOLD)),
           });
           if (view) {
             if (changes.changedIds.length) {
@@ -977,10 +871,8 @@ export const createScenesMcp = ({
   - update: [{ "id": "...", ...props }] partial updates of existing elements, e.g. move (x, y), resize, recolor, change "text" of a text element (labels are text elements with containerId).
   - delete: ids to remove (a container's label goes with it).
   - To label an EXISTING shape, add a text element with "containerId": "<shape id>" (it gets centered in the shape).
-${EDIT_HELP}
-  ${BIG_EDITS}
+  Big edits: put them in a JSON file and pass file (absolute path).
   ${IMAGES_HELP}
-  Safe to retry: every edit has a requestId (yours, or one the result names). Sent again with the same requestId, an edit that already landed is not applied twice: you get its result with alreadyApplied. After a timeout, retry with the same requestId.
   Returns an IMAGE of the edited area (view=false to skip) and the new revision.`,
           inputSchema: {
             name: SCENE_NAME,
@@ -990,21 +882,13 @@ ${EDIT_HELP}
               .optional()
               .describe("Partial updates: [{ id, ...props }]"),
             delete: z.array(z.string()).optional(),
-            ...EDIT_SOURCE,
+            file: EDIT_FILE,
             basedOn: z.string().optional().describe("The revision your edit is based on (from read_scene / edit_scene)"),
-            upsert: z.boolean().optional().describe("add with the id of an existing element replaces that element"),
-            restyle: z.boolean().optional().describe("Deck: apply the deck theme to every slide element, also over fonts / colors set by hand"),
-            requestId: z
-              .string()
-              .regex(/^[A-Za-z0-9_.:-]{1,80}$/)
-              .optional()
-              .describe("Your id for this edit (letters, digits, _ . : -): sent again, it is never applied twice. Default: a new one, named in the result"),
             view: z.boolean().optional().describe("Return an IMAGE of the edited area (default true)"),
           },
         },
-        tool(async ({ name, add, update, delete: remove, file, payloadId, basedOn, upsert, restyle, requestId: givenRequestId, view = true }) => {
-          const requestId = givenRequestId || `edit-${newCheckpointId()}`;
-          const edit = await editInput({ add, update, delete: remove, file, payloadId });
+        tool(async ({ name, add, update, delete: remove, file, basedOn, view = true }) => {
+          const edit = await editInput({ add, update, delete: remove, file });
 
           // what did the user do since the agent's version?
           const local = isLocalOnly(await flushUser(name));
@@ -1016,60 +900,28 @@ ${EDIT_HELP}
           const changes = local ? before.changes(beforeElements) : await changesSince(name, beforeElements, basedOn);
 
           // local-only scenes are edited in the user's app (their only copy)
-          const command = {
+          const edited = await (local ? appCommand : agentCommand)({
             type: local ? "local-edit" : "scene-edit",
             ...(local ? { targetScene: name } : {}),
             name,
-            requestId,
             ...(edit.add.length ? { add: edit.add } : {}),
             ...(edit.update.length ? { update: edit.update } : {}),
             ...(edit.delete.length ? { delete: edit.delete } : {}),
             ...(Object.keys(edit.files).length ? { files: edit.files } : {}),
-            ...(upsert ? { upsert } : {}),
-            ...(restyle ? { restyle } : {}),
-          };
-          const send = () => (local ? appCommand : agentCommand)(command);
-          let edited;
-          try {
-            edited = await send();
-          } catch (error) {
-            if (error.status !== 504) {
-              throw error;
-            }
-            // the tab was slow: asking again joins the edit still running there (or
-            // returns its result), it is never applied twice
-            try {
-              edited = await send();
-            } catch (again) {
-              if (again.status !== 504) {
-                throw again;
-              }
-              throw new Error(
-                `${again.message} Your edit may still land: it has requestId "${requestId}". Call edit_scene again with the same arguments plus requestId: "${requestId}": if it was applied you get its result (alreadyApplied), otherwise it is applied then; it is never applied twice. app_status shows whether the tab is busy.`,
-              );
-            }
-          }
+          });
           const after = {
             elements: edited.elements,
             files: { ...(before.file.files || {}), ...edit.files },
             appState: before.file.appState || {},
           };
 
-          const usesSlideNumbers = [...edit.add, ...edit.update].some((el) => typeof el?.slide === "number" || /^\d+$/.test(String(el?.slide ?? "")));
-          const warning = [
-            changes.firstLook
-              ? basedOn
-                ? null
-                : "You edited without reading this scene first. Call read_scene before editing next time."
-              : changes.count
-              ? `WARNING: the user changed this scene since your version (${changes.report.summary}). Your edit was applied on top of their changes — check them below and fix your edit if it clashes.`
-              : null,
-            usesSlideNumbers && changes.framesChanged
-              ? `WARNING: slides were added, deleted or reordered since your version, and your edit names slides by number: check slideNumbers below (which frame each number hit) and use frame ids.`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" ") || null;
+          const warning = changes.firstLook
+            ? basedOn
+              ? null
+              : "You edited without reading this scene first. Call read_scene before editing next time."
+            : changes.count
+            ? `WARNING: the user changed this scene since your version (${changes.report.summary}). Your edit was applied on top of their changes — check them below and fix your edit if it clashes.`
+            : null;
 
           const result = text({
             ...(warning ? { warning } : {}),
@@ -1078,9 +930,7 @@ ${EDIT_HELP}
             addedIds: idList(edited.addedIds),
             updated: idList([...new Set(edited.updated)]),
             deleted: idList(edited.deleted),
-            ...editExtras(edited),
             ...(edited.missingIds ? { missingIds: edited.missingIds } : {}),
-            requestId,
             revision: local ? edited.revision : edited.sha,
             ...(local
               ? { note: `${LOCAL_NOTE} Your edit is in their app now; nothing else to do.` }
@@ -1175,7 +1025,6 @@ ${EDIT_HELP}
       "validate_deck",
       {
         description: `CHECK a presentation (a scene with slides) the way a careful reviewer would, measured by Excalidraw itself: lists the slides in deck order (number, frame id, title, click steps, notes) and findings per slide — elements cut off at the slide edge, elements lying on a slide without being part of it (frameId missing: left out of presentations/PDFs), labels that don't fit their shape, overlapping text, text over images, text too small or too low in contrast, click steps that never hide or have gaps, placeholders outside the template, missing speaker notes, wrong slide size.
-  Text on a picture is checked against the picture's colors under it. Intended findings (a decorative circle bleeding off the slide, sticky notes on a mock UI) can be silenced per element: "customData": { "slides": { "ignore": ["clipped", "overlap"] } } (finding kinds, or true for all); on a slide frame for its slide-wide findings (e.g. ["notes"]).
   Run it after building or changing a deck; fix the findings with edit_scene, then look at the slides you changed with view_scene(slide: n).`,
         inputSchema: { name: SCENE_NAME },
         annotations: { readOnlyHint: true },
@@ -1188,8 +1037,6 @@ ${EDIT_HELP}
         const result = await agentCommand({
           type: "deck-check",
           elements: file.elements || [],
-          // pictures (for text on them); lean online: the tab fills in the bytes
-          files: file.files || {},
           deck: name,
           background: file.appState?.viewBackgroundColor || "#ffffff",
         });
@@ -1229,8 +1076,6 @@ ${EDIT_HELP}
       }),
     );
 
-    // PDFs are written to the agent's machine: not with Kurviq online (the user exports there)
-    if (LOCAL_FILES) {
     server.registerTool(
       "export_pdf",
       {
@@ -1270,7 +1115,6 @@ ${EDIT_HELP}
         return text({ ...saved, pages: exported.length, slides: exported, sizeKB: Math.round(pdf.length / 1024) });
       }),
     );
-    }
 
     server.registerTool(
       "save_scene",
@@ -1284,9 +1128,7 @@ ${EDIT_HELP}
           name: SCENE_NAME,
           checkpointId: z.string().optional().describe("Checkpoint id returned by create_view / get_scene"),
           elements: z.string().optional().describe("JSON array string of elements (create_view format)"),
-          ...(LOCAL_FILES
-            ? { elementsFile: z.string().optional().describe("Absolute path of a JSON file with the elements array (instead of elements)") }
-            : { payloadId: PAYLOAD_ID }),
+          elementsFile: z.string().optional().describe("Absolute path of a JSON file with the elements array (instead of elements)"),
           open: z.boolean().optional().describe("Switch the user's Excalidraw app to this scene after saving"),
           replace: z
             .boolean()
@@ -1298,16 +1140,12 @@ ${EDIT_HELP}
             .describe("Keep it only in the user's browser: a local-only scene, never synced to GitHub (needs the app open). Only when the user asks for a local / private / not-synced scene"),
         },
       },
-      tool(async ({ name, checkpointId, elements, elementsFile, payloadId, open, replace, local }) => {
+      tool(async ({ name, checkpointId, elements, elementsFile, open, replace, local }) => {
         if (elementsFile) {
           elements = JSON.stringify((await readEditFile(elementsFile)).add || []);
         }
-        if (payloadId) {
-          const add = (await payloadEdit(payloadId)).add || [];
-          elements = typeof add === "string" ? add : JSON.stringify(add);
-        }
         if (!checkpointId && !elements) {
-          throw new Error(`Provide checkpointId, elements or ${LOCAL_FILES ? "elementsFile" : "payloadId"}`);
+          throw new Error("Provide checkpointId, elements or elementsFile");
         }
         if (!local && githubOptional && (await callJson("/api/app/state")).github === false) {
           local = true; // no GitHub in the user's app: the browser is the scene's home
@@ -1521,7 +1359,7 @@ ${EDIT_HELP}
       "app_status",
       {
         description:
-          "Which scene is open in the user's Excalidraw app, whether it has unpushed changes, and every scene the app knows about with its sync status: synced, ahead (not pushed yet), behind (newer on GitHub), diverged, conflict (needs get_conflict / resolve_conflict), local (not on GitHub). The app syncs by itself (auto-sync); scenes marked \"auto-sync off\" are pushed only when the user decides. health checks that edits and pictures are answered right now (what the tab is busy with, if not): use it when calls time out.",
+          "Which scene is open in the user's Excalidraw app, whether it has unpushed changes, and every scene the app knows about with its sync status: synced, ahead (not pushed yet), behind (newer on GitHub), diverged, conflict (needs get_conflict / resolve_conflict), local (not on GitHub). The app syncs by itself (auto-sync); scenes marked \"auto-sync off\" are pushed only when the user decides.",
         annotations: { readOnlyHint: true },
       },
       tool(async () => {
@@ -1529,24 +1367,7 @@ ${EDIT_HELP}
         if (!state.connected) {
           return text({ connected: false, message: "The Excalidraw app is not open in a browser." });
         }
-        const status = await appCommand({ type: "status" });
-        // the health check: a ping through the same queues as edits and pictures
-        const started = Date.now();
-        const answered = await Promise.race([
-          agentCommand({ type: "ping" }).then(
-            () => true,
-            (error) => (/Unknown command/.test(error.message) ? true : error.message),
-          ),
-          new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
-        ]);
-        const ms = Date.now() - started;
-        const health =
-          answered === true
-            ? `ok: edits and pictures are answered (${ms} ms)`
-            : answered === false
-            ? `BUSY: edits and pictures wait (no answer within 8 s)${status.busy?.length ? `; working on: ${status.busy.join(", ")}` : ""}. Edits sent now run when it is done (a stuck task is given up after 90 s); if it stays busy, ask the user to bring the tab to the front or reload it.`
-            : `error: ${answered}`;
-        return text({ connected: true, health, ...status });
+        return text({ connected: true, ...(await appCommand({ type: "status" })) });
       }),
     );
 
@@ -1711,7 +1532,7 @@ ${EDIT_HELP}
     { instructions: INSTRUCTIONS },
   );
   /** read_me also explains what this app adds: images/icons, ER heads, slides */
-  const SKILL_EXTRAS = ["## Editing elements", "## Limits", "## Formatted text", "## Slides (presentations)"]
+  const SKILL_EXTRAS = ["## Editing elements", "## Formatted text", "## Slides (presentations)"]
     .map((heading) => {
       const start = INSTRUCTIONS.indexOf(heading);
       const end = INSTRUCTIONS.indexOf("\n## ", start + heading.length);

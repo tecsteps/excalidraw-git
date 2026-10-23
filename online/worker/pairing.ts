@@ -37,9 +37,6 @@ type Pending = {
 };
 
 const COMMAND_TIMEOUT_MS = 30_000;
-/** edits (commits with pictures) and pictures may take longer */
-const SLOW_COMMANDS = new Set(["scene-edit", "local-edit", "render", "deck-check", "convert", "upload", "upload-payload", "http"]);
-const SLOW_TIMEOUT_MS = 75_000;
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(typeof body === "string" ? body : JSON.stringify(body), {
@@ -102,20 +99,13 @@ export class Pairing extends DurableObject {
     );
   }
 
-  private send(ws: WebSocket, command: any, timeoutMs?: number) {
+  private send(ws: WebSocket, command: unknown, timeoutMs = COMMAND_TIMEOUT_MS) {
     const id = String(++this.seq);
-    const type = String(command?.type ?? "");
-    const wait = timeoutMs ?? (SLOW_COMMANDS.has(type) ? SLOW_TIMEOUT_MS : COMMAND_TIMEOUT_MS);
     return new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(
-          httpError(
-            504,
-            `The Kurviq tab did not answer within ${Math.round(wait / 1000)} s (${type || "command"}). It may be busy, or the browser may have paused it in the background. app_status shows what the tab is working on.`,
-          ),
-        );
-      }, wait);
+        reject(httpError(504, "The Kurviq tab did not answer in time (is it in the background on a phone, or busy?)"));
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer, tab: (ws.deserializeAttachment() as Attachment).tab });
       // with this build: a tab running an older version says so instead of half-working
       sendMessage(ws, { type: "command", id, command, build: __KURVIQ_BUILD__ });

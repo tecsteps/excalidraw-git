@@ -66,43 +66,6 @@ export const byIds = (elements, ids) => {
   );
 };
 
-const slideData = (el) => el?.customData?.slides || {};
-const isFrame = (el) => el && !el.isDeleted && (el.type === "frame" || el.type === "magicframe");
-
-/** a deck's slide frames in deck order (as the app counts them: explicit order first, then rows left to right) */
-export const deckOrder = (elements) => {
-  const frames = elements.filter((el) => isFrame(el) && el.type === "frame" && slideData(el).role !== "template");
-  const canvasOrder = [...frames].sort((a, b) =>
-    Math.abs(a.y - b.y) > Math.min(a.height, b.height) / 2 ? a.y - b.y : a.x - b.x,
-  );
-  const rank = new Map(canvasOrder.map((frame, index) => [frame.id, index]));
-  return frames.sort((a, b) => {
-    const oa = slideData(a).order;
-    const ob = slideData(b).order;
-    if (oa !== undefined && ob !== undefined && oa !== ob) {
-      return oa - ob;
-    }
-    if (oa !== undefined && ob === undefined) {
-      return -1;
-    }
-    if (ob !== undefined && oa === undefined) {
-      return 1;
-    }
-    return rank.get(a.id) - rank.get(b.id);
-  });
-};
-
-/** the frame a slide reference means: number (deck order), frame id or "template" */
-export const findSlide = (elements, slide) => {
-  if (slide === "template") {
-    return elements.find((el) => isFrame(el) && slideData(el).role === "template") ?? null;
-  }
-  if (typeof slide === "number" || /^\d+$/.test(String(slide))) {
-    return deckOrder(elements)[Number(slide) - 1] ?? null;
-  }
-  return elements.find((el) => isFrame(el) && el.id === slide) ?? null;
-};
-
 /** overview of a scene: where things are, without dumping every element.
  * Text labels are paged (textsOffset / textsLimit) so huge scenes stay small. */
 export const summarize = (elements, { textsOffset = 0, textsLimit = 100 } = {}) => {
@@ -111,22 +74,12 @@ export const summarize = (elements, { textsOffset = 0, textsLimit = 100 } = {}) 
   for (const el of elements) {
     countsByType[el.type] = (countsByType[el.type] || 0) + 1;
   }
-  const slideNumber = new Map(deckOrder(elements).map((frame, i) => [frame.id, i + 1]));
   const frames = elements
     .filter((el) => el.type === "frame" || el.type === "magicframe")
-    .map((el) => ({
-      id: el.id,
-      name: el.name ?? null,
-      ...(slideNumber.has(el.id) ? { slide: slideNumber.get(el.id) } : {}),
-      ...(slideData(el).role === "template" ? { template: true } : {}),
-      ...toRect(elementBounds(el)),
-    }))
-    .sort((a, b) => (a.slide ?? 0) - (b.slide ?? 0));
-  // the template's copies on every slide (ids "<element>~<slide>") would repeat the same labels
-  const copies = elements.filter((el) => slideData(el).copyOf).length;
+    .map((el) => ({ id: el.id, name: el.name ?? null, ...toRect(elementBounds(el)) }));
 
   const texts = elements
-    .filter((el) => el.type === "text" && el.text?.trim() && !slideData(el).copyOf)
+    .filter((el) => el.type === "text" && el.text?.trim())
     .map((el) => {
       const container = el.containerId && byId.get(el.containerId);
       const rect = toRect(elementBounds(container || el));
@@ -144,7 +97,6 @@ export const summarize = (elements, { textsOffset = 0, textsLimit = 100 } = {}) 
     sceneBounds: toRect(commonBounds(elements)),
     countsByType,
     ...(frames.length ? { frames } : {}),
-    ...(copies ? { templateCopies: `${copies} elements are copies of the template on the slides (ids "<element>~<slide>", not listed): change the template instead` } : {}),
     textCount: texts.length,
     texts: texts.slice(textsOffset, textsOffset + textsLimit),
     ...(texts.length > textsOffset + textsLimit
