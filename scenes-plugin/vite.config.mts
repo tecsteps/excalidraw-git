@@ -431,9 +431,13 @@ const KURVIQ_ICONS = `<link rel="icon" href="/favicon.ico" sizes="48x48" />
 
 /**
  * What search engines (and visitors without JavaScript) see; the app replaces
- * it as soon as it starts.
+ * it as soon as it starts. Invisible meanwhile (else it flashes on every
+ * load): shown at once without JavaScript, and after a few seconds if the app
+ * doesn't start.
  */
-const KURVIQ_STATIC = `<div id="root"><main class="kq-static" style="max-width:40rem;margin:12vh auto;padding:0 1.5rem;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#555;line-height:1.55">
+const KURVIQ_STATIC = `<style>.kq-static{opacity:0;animation:kq-static-show .3s 4s forwards}@keyframes kq-static-show{to{opacity:1}}</style>
+    <noscript><style>.kq-static{opacity:1;animation:none}</style></noscript>
+    <div id="root"><main class="kq-static" style="max-width:40rem;margin:12vh auto;padding:0 1.5rem;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#555;line-height:1.55">
       <h1 style="color:#1f1d3a;font-size:2rem;margin:0 0 .5rem">Kurviq: hand-drawn diagrams, synced with GitHub</h1>
       <p>Kurviq is a free online whiteboard built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a>. Sketch diagrams with a hand-drawn look, organise them as named scenes, present them as slides and write formatted text. No account needed: your drawings stay in your browser. <a href="/features">All features</a>.</p>
       <h2 style="font-size:1.1rem;color:#1f1d3a">Sync with GitHub, together</h2>
