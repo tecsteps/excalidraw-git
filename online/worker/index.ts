@@ -97,12 +97,16 @@ const handleUpload = async (request: Request, env: Env, key: string) => {
       error: bytes.length ? `At most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB per image` : "Empty body: send the image file as the request body (curl --data-binary @image.png)",
     });
   }
-  const mimeType = imageType(bytes);
-  if (!mimeType) {
-    return answer(415, { error: "Not an image: PNG, JPEG, GIF, WebP or SVG" });
-  }
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", bytes));
   const id = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const first = bytes.find((byte) => byte !== 0x20 && byte !== 0x0a && byte !== 0x0d && byte !== 0x09);
+  if (first === 0x7b || first === 0x5b) {
+    return uploadPayload(request, env, key, id, bytes, answer);
+  }
+  const mimeType = imageType(bytes);
+  if (!mimeType) {
+    return answer(415, { error: "Not an image (PNG, JPEG, GIF, WebP or SVG) and not an edit (JSON)" });
+  }
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -128,6 +132,45 @@ const handleUpload = async (request: Request, env: Env, key: string) => {
     width,
     height,
     use: `Add it with edit_scene (or save_scene): { "type": "image", "id": "<your id>", "x": 0, "y": 0, "width": ${Math.min(width, 1200)}, "fileId": "${fileId}" } (width or height alone keeps the aspect ratio).`,
+  });
+};
+
+/** big edits an agent uploads instead of pasting them into a tool call */
+const MAX_PAYLOAD_BYTES = 1_000_000;
+
+/**
+ * POST /mcp/<key>/upload with a JSON body ({ "add": [...], "update": [...],
+ * "delete": [...] } or an array of elements to add): kept by the user's tab
+ * until edit_scene / save_scene names it as payloadId.
+ */
+const uploadPayload = async (
+  request: Request,
+  env: Env,
+  key: string,
+  id: string,
+  bytes: Uint8Array,
+  answer: (status: number, body: unknown) => Response,
+) => {
+  if (bytes.length > MAX_PAYLOAD_BYTES) {
+    return answer(413, { error: `An edit payload may be at most ${MAX_PAYLOAD_BYTES / 1_000_000} MB: split it into several edits` });
+  }
+  const stub = await pairingStub(env, key);
+  const res = await stub.fetch(
+    new Request("https://pairing/api/app/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Kurviq-App": new URL(request.url).origin },
+      body: JSON.stringify({ type: "upload-payload", payload: { id, json: new TextDecoder().decode(bytes) } }),
+    }),
+  );
+  const body = (await res.json().catch(() => ({}))) as { result?: Record<string, unknown>; error?: string };
+  if (!res.ok || !body.result) {
+    return answer(res.status >= 400 ? res.status : 502, {
+      error: body.error || "The Kurviq tab did not take the edit. Is Kurviq open in the browser this agent link was made in?",
+    });
+  }
+  return answer(200, {
+    ...body.result,
+    use: `Apply it with edit_scene(name, payloadId: "${id}") (or save_scene(name, payloadId: "${id}") for a new scene); add basedOn, upsert, view etc. as usual.`,
   });
 };
 
@@ -180,6 +223,9 @@ const handleMcp = async (request: Request, env: Env, key: string) => {
     githubOptional: true,
     // scenes full of images: read without their bytes (CPU budget), the tab fills them in for pictures
     leanReads: true,
+    // no access to the agent's files here: images and big edits are uploaded
+    localFiles: false,
+    uploadUrl: `${app}/mcp/${key}/upload`,
     skill: kurviqSkill(app, `${app}/mcp/${key}/upload`),
     unreachable,
     serverFetch: (pathname: string, init: RequestInit = {}) => {

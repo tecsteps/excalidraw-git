@@ -17,13 +17,14 @@ import {
   getBoundTextMaxHeight,
   hashString,
   refreshTextDimensions,
+  syncInvalidIndices,
   updateBoundElements,
 } from "@excalidraw/element";
 
 import { registerSceneFonts, withFonts } from "./fonts";
 import { scenesApi } from "./api";
 import { applyMarkdownUpdate } from "./richText/agent";
-import { placeOnSlides, syncTemplate } from "./slides";
+import { applyTheme, getSlides, getTemplate, getTheme, placeOnSlides, slideTitle, syncTemplate } from "./slides";
 import { scenesController, withSceneName } from "./controller";
 import { getAgentBaseline, getCheckpoint, setAgentBaseline, setCheckpoint } from "./storage";
 
@@ -58,6 +59,16 @@ export type SceneEditCommand = {
   add?: any[];
   update?: Array<{ id: string; [key: string]: unknown }>;
   delete?: string[];
+} & EditOptions;
+
+/** how an agent's edit treats existing elements */
+export type EditOptions = {
+  /** add with the id of an existing element replaces it */
+  upsert?: boolean;
+  /** apply the deck theme to every slide element, also over values set by hand */
+  restyle?: boolean;
+  /** the agent's id for this edit: sent again (e.g. after a timeout), it is not applied twice */
+  requestId?: string;
 };
 
 export type EditCommand = {
@@ -72,7 +83,8 @@ export type EditCommand = {
   delete?: string[];
   /** image files of added image elements */
   files?: BinaryFiles;
-} & BaselineOptions;
+} & BaselineOptions &
+  EditOptions;
 
 const requireApi = () => {
   const api = scenesController.getApi();
@@ -152,7 +164,7 @@ const layoutAfterEdit = (
     if (!textChanged.has(el.id) && !reshaped.has(container.id) && !reshaped.has(el.id)) {
       continue;
     }
-    let text: any = { ...el, ...(refreshTextDimensions(el as any, container, map) || {}) };
+    let text: any = { ...el, ...(refreshTextDimensions(el as any, container, map, (el as any).originalText ?? (el as any).text) || {}) };
     if (text.height > getBoundTextMaxHeight(container, text)) {
       scene.mutateElement(container, {
         height: (computeContainerDimensionForBoundText as any)(text.height, container.type, container),
@@ -178,6 +190,11 @@ const layoutAfterEdit = (
   return [...scene.getElementsIncludingDeleted()] as ExcalidrawElement[];
 };
 
+/** how big the scene file is now (images make it big) */
+export const sceneSize = (json: string, elements: readonly ExcalidrawElement[]) => ({
+  sceneFile: `${Math.round(json.length / 1024)} KB, ${elements.filter((el) => el.type === "image" && !el.isDeleted).length} image elements`,
+});
+
 /** a deck's slides get their template copies (header, footer, page numbers) */
 export const withTemplate = (elements: ExcalidrawElement[], deck: string) =>
   syncTemplate(elements, deck)?.elements ?? elements;
@@ -192,27 +209,58 @@ const PROTECTED = new Set(["id", "type", "version", "versionNonce", "isDeleted",
  */
 const applyEdits = async (
   input: readonly ExcalidrawElement[],
-  command: Pick<EditCommand, "add" | "update" | "delete">,
+  command: Pick<EditCommand, "add" | "update" | "delete" | "upsert" | "restyle">,
   convert: (elements: any[]) => Promise<any[]>,
 ) => {
   let elements: ExcalidrawElement[] = [...input];
   const byId = () => new Map(elements.map((el) => [el.id, el]));
   const missing: string[] = [];
+  const slideTargets = resolvedSlides(elements, [...(command.add || []), ...(command.update || [])]);
 
-  // deletions (containers take their labels along)
-  if (command.delete?.length) {
-    const ids = new Set(command.delete);
+  /** delete these (containers take their labels along, slides everything on them) */
+  const remove = (wanted: Iterable<string>) => {
+    const ids = new Set(wanted);
+    const frames = new Set(
+      elements.filter((el) => ids.has(el.id) && (el.type === "frame" || el.type === "magicframe")).map((el) => el.id),
+    );
+    for (const el of elements) {
+      if (el.frameId && frames.has(el.frameId)) {
+        ids.add(el.id);
+      }
+    }
     for (const el of elements) {
       if ((el as any).containerId && ids.has((el as any).containerId)) {
         ids.add(el.id);
       }
     }
+    let count = 0;
+    elements = elements.map((el) => {
+      if (!ids.has(el.id) || el.isDeleted) {
+        return el;
+      }
+      count++;
+      return newElementWith(el, { isDeleted: true });
+    });
+    return count;
+  };
+
+  let alsoDeleted = 0;
+  if (command.delete?.length) {
     const present = byId();
-    command.delete.forEach((id) => !present.has(id) && missing.push(id));
-    elements = elements.map((el) =>
-      ids.has(el.id) && !el.isDeleted ? newElementWith(el, { isDeleted: true }) : el,
-    );
+    command.delete.forEach((id) => !present.get(id) || present.get(id)!.isDeleted ? missing.push(id) : null);
+    alsoDeleted = remove(command.delete.filter((id) => !missing.includes(id))) - (command.delete.length - missing.length);
   }
+
+  /** layer moves asked for ({ zIndex: "front" | "back" } or { above / below: id }), applied at the end */
+  const moves: Array<{ id: string; zIndex?: unknown; above?: unknown; below?: unknown }> = [];
+  const takeMove = (item: Record<string, any>) => {
+    const { zIndex, above, below, ...rest } = item;
+    if (zIndex !== undefined || above !== undefined || below !== undefined) {
+      moves.push({ id: item.id, zIndex, above, below });
+    }
+    return rest;
+  };
+  const themeBefore = getTheme(elements);
 
   // partial updates
   const textUpdated = new Set<string>();
@@ -227,7 +275,7 @@ const applyEdits = async (
     const updates = placeOnSlides(command.update, elements);
     const labelOf = (id: string) =>
       elements.find((el) => !el.isDeleted && el.type === "text" && (el as any).containerId === id);
-    for (const { id, ...props } of updates) {
+    for (const { id, ...props } of updates.map(takeMove)) {
       const el = present.get(id);
       if (!el || el.isDeleted) {
         missing.push(id);
@@ -250,10 +298,10 @@ const applyEdits = async (
           patches.set(existing.id, { ...(patches.get(existing.id) || {}), ...spec });
           if (typeof spec.text === "string") {
             patches.get(existing.id)!.originalText = spec.text;
-            textUpdated.add(existing.id);
-          } else {
-            reshaped.add(id);
           }
+          // re-wrapped and measured with its (new) font
+          textUpdated.add(existing.id);
+          reshaped.add(id);
         } else if (typeof spec.text === "string") {
           newLabels.push({ type: "text", id: `${id}-label`, containerId: id, ...spec });
         }
@@ -261,6 +309,14 @@ const applyEdits = async (
       if (el.type === "text" && typeof patch.text === "string") {
         patch.originalText = patch.text;
         textUpdated.add(el.id);
+      }
+      // another font or size: measured again (else the box keeps the old font's size and cuts the text)
+      if (el.type === "text" && ["fontFamily", "fontSize", "lineHeight", "width", "autoResize"].some((key) => key in patch)) {
+        textUpdated.add(el.id);
+      }
+      // a free text given a width wraps at it (a box from x to x + width; textAlign aligns inside)
+      if (el.type === "text" && !(el as any).containerId && typeof patch.width === "number" && !("autoResize" in patch)) {
+        patch.autoResize = false;
       }
       if (["x", "y", "width", "height", "angle", "points"].some((key) => key in patch)) {
         reshaped.add(id);
@@ -288,36 +344,97 @@ const applyEdits = async (
       const patch = patches.get(el.id);
       return patch ? newElementWith(el, patch as any) : el;
     });
-    // re-measure edited text, with its font loaded (else a fallback font is
-    // measured and the text is cut off in the user's browser)
-    if (textUpdated.size) {
-      await Fonts.loadElementsFonts(elements.filter((el) => textUpdated.has(el.id))).catch(() => []);
-      const refreshed = new Map(
-        restoreElements(
-          elements.filter((el) => textUpdated.has(el.id)),
-          elements,
-          { refreshDimensions: true },
-        ).map((el) => [el.id, el]),
-      );
-      elements = elements.map((el) => refreshed.get(el.id) ?? el);
+  }
+
+  // the deck theme changed (or `restyle`): slide elements follow, like when
+  // the user changes the deck style; `restyle` also overrides values set by hand
+  let restyled = 0;
+  const themeAfter = getTheme(elements);
+  if (getTemplate(elements) && (command.restyle || JSON.stringify(themeBefore) !== JSON.stringify(themeAfter))) {
+    const frames = new Set(getSlides(elements).map((slide) => slide.id));
+    const template = getTemplate(elements);
+    if (template) {
+      frames.add(template.id);
     }
+    await Fonts.loadElementsFonts([{ type: "text", fontFamily: themeAfter.fontFamily, text: "", originalText: "" } as any]).catch(() => []);
+    const themed = applyTheme(elements, themeBefore, themeAfter, { force: command.restyle ? frames : null });
+    if (themed) {
+      themed.forEach((el, i) => {
+        if (el !== elements[i]) {
+          restyled++;
+          if (el.type === "text") {
+            textUpdated.add(el.id);
+          }
+          if ((el as any).containerId) {
+            reshaped.add((el as any).containerId);
+          }
+        }
+      });
+      elements = themed;
+    }
+  }
+
+  // re-measure edited text, with its font loaded (else a fallback font is
+  // measured and the text is cut off in the user's browser); a free text
+  // keeps its alignment (centered text stays centered where it was)
+  if (textUpdated.size) {
+    await Fonts.loadElementsFonts(elements.filter((el) => textUpdated.has(el.id))).catch(() => []);
+    const map = new Map(elements.map((el) => [el.id, el])) as any;
+    const refreshed = new Map(
+      elements
+        .filter((el) => textUpdated.has(el.id) && el.type === "text" && !(el as any).containerId)
+        .map((el: any) => [el.id, { ...el, ...(refreshTextDimensions(el, null, map, el.originalText ?? el.text) || {}) }]),
+    );
+    elements = elements.map((el) => {
+      const next = refreshed.get(el.id) as any;
+      if (!next) {
+        return el;
+      }
+      const shift = el.width - next.width;
+      if (next.autoResize !== false && shift && (next.textAlign === "center" || next.textAlign === "right")) {
+        return { ...next, x: el.x + (next.textAlign === "center" ? shift / 2 : shift) };
+      }
+      return next;
+    });
   }
 
   // additions: converted together with the existing elements, so arrows can
   // bind to shapes that are already on the canvas
   let addedIds: string[] = [];
-  const toAdd = [...(command.add || []), ...newLabels];
+  let replacedIds: string[] = [];
+  const toAdd = [...(command.add || []), ...newLabels].map((el) => (el && typeof el === "object" ? takeMove(el) : el));
   if (toAdd.length) {
-    const existingIds = new Set(elements.map((el) => el.id));
-    const clash = toAdd.filter((el) => existingIds.has(el?.id));
-    if (clash.length) {
+    const current = byId();
+    const clash = toAdd.filter((el) => current.get(el?.id) && !current.get(el.id)!.isDeleted);
+    if (clash.length && !command.upsert) {
       throw new Error(
-        `Element ids already exist: ${clash.map((el) => el.id).join(", ")} — use update for existing elements or pick new ids`,
+        `Element ids already exist: ${clash.map((el) => el.id).join(", ")} — use update for existing elements, pick new ids, or pass upsert: true to replace them (nothing was changed)`,
       );
     }
+    if (clash.length) {
+      // upsert: the old elements (with their labels) make way for the new ones
+      replacedIds = clash.map((el) => el.id);
+      remove(replacedIds.filter((id) => !(current.get(id)!.type === "frame" || current.get(id)!.type === "magicframe")));
+      // a replaced slide keeps what is on it: only the frame itself is new
+      elements = elements.map((el) =>
+        replacedIds.includes(el.id) && !el.isDeleted ? newElementWith(el, { isDeleted: true }) : el,
+      );
+    }
+    // ids of deleted elements can be used again: the new element outranks the
+    // deleted one wherever the two meet (the user's app merges by version)
+    const deletedById = new Map(elements.filter((el) => el.isDeleted).map((el) => [el.id, el]));
     const live = elements.filter((el) => !el.isDeleted);
-    const merged = await convert([...live, ...toAdd]);
+    const liveIds = new Set(live.map((el) => el.id));
+    const merged = (await convert([...live, ...toAdd])).map((el: any) => {
+      const tombstone = deletedById.get(el.id);
+      return tombstone && !liveIds.has(el.id)
+        ? { ...el, version: tombstone.version + 1, versionNonce: Math.floor(Math.random() * 2 ** 31) }
+        : el;
+    });
+    const existingIds = liveIds;
     addedIds = merged.filter((el) => !existingIds.has(el.id)).map((el) => el.id);
+    const reused = new Set(addedIds.filter((id) => deletedById.has(id)));
+    elements = elements.filter((el) => !reused.has(el.id));
     const mergedById = new Map(merged.map((el) => [el.id, el]));
 
     // labels added as text with containerId (not via a shape's `label`): center
@@ -352,14 +469,124 @@ const applyEdits = async (
   }
 
   elements = layoutAfterEdit(elements, textUpdated, reshaped);
+  const moved = moveLayers(elements, moves.filter((move) => !missing.includes(move.id)));
+  elements = moved.elements;
 
   return {
     elements,
     addedIds,
     updated: (command.update || []).map((u) => u.id).filter((id) => !missing.includes(id)),
     deleted: (command.delete || []).filter((id) => !missing.includes(id)),
+    ...(alsoDeleted > 0 ? { alsoDeleted: `${alsoDeleted} more elements went with them (labels, and everything on deleted slides)` } : {}),
+    ...(replacedIds.length ? { replaced: replacedIds } : {}),
+    ...(restyled ? { restyled: `${restyled} elements took the deck theme` } : {}),
+    ...(moved.problems.length ? { layerProblems: moved.problems } : {}),
+    ...(slideTargets ? { slideNumbers: slideTargets } : {}),
     ...(missing.length ? { missingIds: missing } : {}),
   };
+};
+
+/**
+ * Slide numbers count in deck order as it is now (they shift when slides are
+ * deleted or moved): which slide each number used in an edit meant.
+ */
+const resolvedSlides = (elements: readonly ExcalidrawElement[], items: any[]) => {
+  const numbers = [...new Set(items.map((item) => item?.slide).filter((slide) => typeof slide === "number" || /^\d+$/.test(String(slide ?? ""))))];
+  if (!numbers.length) {
+    return null;
+  }
+  const slides = getSlides(elements);
+  return Object.fromEntries(
+    numbers.map((n) => {
+      const slide = slides[Number(n) - 1];
+      return [String(n), slide ? `frame ${slide.id} "${slideTitle(slide, Number(n) - 1)}"` : "no such slide"];
+    }),
+  );
+};
+
+/** images whose file is in the scene but which were marked broken (e.g. a failed load in some browser) work again */
+const repairImages = (elements: readonly ExcalidrawElement[], files: BinaryFiles) => {
+  let repaired = 0;
+  let missingFiles = 0;
+  const next = elements.map((el) => {
+    if (el.type !== "image" || el.isDeleted) {
+      return el;
+    }
+    const fileId = (el as any).fileId;
+    if (!fileId || !files[fileId]) {
+      missingFiles++;
+      return el;
+    }
+    if ((el as any).status === "error" || (el as any).status === "pending") {
+      repaired++;
+      return newElementWith(el as any, { status: "saved" } as any);
+    }
+    return el;
+  });
+  return {
+    elements: next,
+    info: {
+      ...(repaired ? { imagesRepaired: repaired } : {}),
+      ...(missingFiles ? { imagesWithoutFile: `${missingFiles} image elements have no image data in the scene (they show as placeholders): add them again (e.g. upload the file)` } : {}),
+    },
+  };
+};
+
+/**
+ * Layer order: `zIndex: "front" | "back"` (within its slide: above / below
+ * everything else on it) or `above` / `below` another element. A shape's
+ * label moves with it.
+ */
+const moveLayers = (
+  input: ExcalidrawElement[],
+  moves: Array<{ id: string; zIndex?: unknown; above?: unknown; below?: unknown }>,
+) => {
+  const problems: string[] = [];
+  if (!moves.length) {
+    return { elements: input, problems };
+  }
+  let list = [...input];
+  for (const move of moves) {
+    const el = list.find((item) => item.id === move.id && !item.isDeleted);
+    if (!el) {
+      continue;
+    }
+    const group = new Set([el.id, ...list.filter((item) => (item as any).containerId === el.id).map((item) => item.id)]);
+    const rest = list.filter((item) => !group.has(item.id));
+    const moving = list.filter((item) => group.has(item.id)).map((item) => newElementWith(item, { index: null } as any));
+    const sameLayer = (item: ExcalidrawElement) => !item.isDeleted && (item.frameId ?? null) === (el.frameId ?? null) && item.type !== "frame";
+    let at: number;
+    if (typeof move.above === "string" || typeof move.below === "string") {
+      const ref = (move.above ?? move.below) as string;
+      const index = rest.findIndex((item) => item.id === ref && !item.isDeleted);
+      if (index < 0) {
+        problems.push(`${move.id}: ${move.above !== undefined ? "above" : "below"} "${ref}": no such element`);
+        continue;
+      }
+      if (move.above !== undefined) {
+        // above the element and its label
+        let end = index;
+        while (end + 1 < rest.length && (rest[end + 1] as any).containerId === ref) {
+          end++;
+        }
+        at = end + 1;
+      } else {
+        at = index;
+      }
+    } else if (move.zIndex === "front") {
+      const last = rest.reduce((found, item, i) => (sameLayer(item) ? i : found), -1);
+      at = last < 0 ? rest.length : last + 1;
+    } else if (move.zIndex === "back") {
+      const first = rest.findIndex((item) => sameLayer(item));
+      at = first < 0 ? 0 : first;
+    } else {
+      problems.push(`${move.id}: zIndex must be "front" or "back" (or use above / below with an element id)`);
+      continue;
+    }
+    list = [...rest.slice(0, at), ...moving, ...rest.slice(at)];
+  }
+  syncInvalidIndices(list as any);
+  return { elements: list, problems };
 };
 
 export const editOpenScene = async (
@@ -385,8 +612,9 @@ export const editOpenScene = async (
     convert,
   );
 
+  const images = repairImages(elements, api.getFiles());
   api.updateScene({
-    elements,
+    elements: images.elements,
     captureUpdate: CaptureUpdateAction.IMMEDIATELY, // user can undo agent edits
   });
 
@@ -396,6 +624,7 @@ export const editOpenScene = async (
     ...sceneInfo(),
     ...(await handleBaseline(scene, after, command)),
     ...edit,
+    ...images.info,
     elements: after,
   };
 };
@@ -418,17 +647,16 @@ export const editSceneOnGitHub = async (
       command,
       convert,
     );
-    const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
+    const files = { ...(data.files || {}), ...(command.files || {}) };
+    const images = repairImages(withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted), files);
+    const elements = images.elements;
     const json = withSceneName(
-      withFonts(
-        serializeAsJSON(elements, data.appState || {}, { ...(data.files || {}), ...(command.files || {}) }, "local"),
-        elements,
-      ),
+      withFonts(serializeAsJSON(elements, data.appState || {}, files, "local"), elements),
       command.name, // ties the content to this scene
     );
     try {
       const saved = await scenesApi.save(command.name, json, latest.sha, "agent");
-      return { ...edit, elements, sha: saved.sha, commit: saved.commit, changed: saved.changed };
+      return { ...edit, ...images.info, ...sceneSize(json, elements), elements, sha: saved.sha, commit: saved.commit, changed: saved.changed };
     } catch (error) {
       if ((error as ApiError).status !== 409 || attempt >= 3) {
         throw error;
@@ -445,7 +673,7 @@ export const editSceneOnGitHub = async (
 
 export type LocalSceneCommand =
   | { type: "local-read"; name: string; since?: string }
-  | ({ type: "local-edit"; name: string } & Pick<EditCommand, "add" | "update" | "delete" | "files">)
+  | ({ type: "local-edit"; name: string } & Pick<EditCommand, "add" | "update" | "delete" | "files"> & EditOptions)
   | { type: "local-save"; name: string; json: string; replace?: boolean; open?: boolean };
 
 const revisionKey = (name: string, revision: string) => `local:${name}:${revision}`;
@@ -497,13 +725,16 @@ export const editLocalScene = async (
     command,
     convert,
   );
-  const elements = withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted);
   const files = { ...(data.files || {}), ...(command.files || {}) };
+  const images = repairImages(withTemplate(edit.elements, command.name).filter((el) => !el.isDeleted), files);
+  const elements = images.elements;
   const json = withSceneName(withFonts(serializeAsJSON(elements, data.appState || {}, files, "local"), elements), command.name);
   await scenesController.writeLocalOnly(command.name, json);
   await setAgentBaseline(command.name, { at: new Date().toISOString(), action: "edit", elements });
   return {
     ...edit,
+    ...images.info,
+    ...sceneSize(json, elements),
     elements,
     files,
     appState: data.appState || {},

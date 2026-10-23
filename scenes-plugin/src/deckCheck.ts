@@ -19,6 +19,7 @@ import { LINK_COLOR } from "./richText/layout";
 import { richDocOf } from "./richText/model";
 
 import type { ExcalidrawElement } from "@excalidraw/element/types";
+import type { BinaryFiles } from "@excalidraw/excalidraw/types";
 
 type Box = [number, number, number, number];
 type Issue = { slide: number | null; id?: string; kind: string; message: string };
@@ -69,6 +70,83 @@ const isFilled = (el: ExcalidrawElement) =>
   el.backgroundColor !== "transparent" &&
   el.opacity > 30;
 
+/**
+ * Findings an element is marked to skip, because they are intended:
+ * `customData.slides.ignore: ["overlap", "clipped"]` (or true: all of them)
+ */
+const ignores = (el: ExcalidrawElement | undefined, kind: string) => {
+  const ignore = (el?.customData as any)?.slides?.ignore;
+  return ignore === true || (Array.isArray(ignore) && (ignore.includes(kind) || ignore.includes("all")));
+};
+
+const toHex = (rgb: number[]) => `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("")}`;
+
+const images = new Map<string, Promise<HTMLImageElement | null>>();
+const loadImage = (fileId: string, dataURL: string) => {
+  if (!images.has(fileId)) {
+    images.set(
+      fileId,
+      new Promise((resolve) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        setTimeout(() => resolve(null), 10_000);
+        image.src = dataURL;
+      }),
+    );
+    while (images.size > 60) {
+      images.delete(images.keys().next().value!);
+    }
+  }
+  return images.get(fileId)!;
+};
+
+/** the average color of the part of a picture that lies under a box (null: unknown) */
+const colorOfImage = async (image: any, box: Box, files: BinaryFiles) => {
+  const file = image.fileId && (files as any)[image.fileId];
+  if (!file?.dataURL || !image.width || !image.height) {
+    return null;
+  }
+  const img = await loadImage(image.fileId, file.dataURL);
+  if (!img || !img.naturalWidth) {
+    return null;
+  }
+  const part = intersection(box, [image.x, image.y, image.x + image.width, image.y + image.height]);
+  if (area(part) <= 0) {
+    return null;
+  }
+  const crop = image.crop;
+  const nw = crop?.width ?? img.naturalWidth;
+  const nh = crop?.height ?? img.naturalHeight;
+  const ox = crop?.x ?? 0;
+  const oy = crop?.y ?? 0;
+  const sx = ox + ((part[0] - image.x) / image.width) * nw;
+  const sy = oy + ((part[1] - image.y) / image.height) * nh;
+  const sw = Math.max(1, ((part[2] - part[0]) / image.width) * nw);
+  const sh = Math.max(1, ((part[3] - part[1]) / image.height) * nh);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 24;
+    canvas.height = 24;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 24, 24);
+    const data = ctx.getImageData(0, 0, 24, 24).data;
+    const sum = [0, 0, 0];
+    let weight = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const alpha = data[i + 3] / 255;
+      sum[0] += data[i] * alpha;
+      sum[1] += data[i + 1] * alpha;
+      sum[2] += data[i + 2] * alpha;
+      weight += alpha;
+    }
+    // (mostly) transparent: what's behind the picture shows
+    return weight < 24 * 24 * 0.5 ? null : toHex(sum.map((v) => v / weight));
+  } catch {
+    return null;
+  }
+};
+
 const preview = (text: string) => {
   const line = text.replace(/\s+/g, " ").trim();
   return `"${line.length > 40 ? `${line.slice(0, 37)}…` : line}"`;
@@ -76,7 +154,7 @@ const preview = (text: string) => {
 
 export const checkDeck = async (
   input: readonly ExcalidrawElement[],
-  { deck, background = "#ffffff" }: { deck: string; background?: string },
+  { deck, background = "#ffffff", files = {} }: { deck: string; background?: string; files?: BinaryFiles },
 ) => {
   const elements = withTemplate([...input], deck).filter((el) => !el.isDeleted);
   await Fonts.loadElementsFonts(elements).catch(() => []);
@@ -106,8 +184,8 @@ export const checkDeck = async (
     return box;
   };
 
-  /** the color behind a text: its filled shape, a filled shape below it on the slide, or the canvas */
-  const behindOf = (el: any, slideId: string) => {
+  /** what is behind a text: its filled shape, a filled shape or picture below it on the slide, or the canvas */
+  const behindOf = (el: any, slideId: string): string | { image: any } => {
     const container = el.containerId && map.get(el.containerId);
     if (container && isFilled(container)) {
       return container.backgroundColor as string;
@@ -117,24 +195,43 @@ export const checkDeck = async (
     const cy = (box[1] + box[3]) / 2;
     for (let k = elements.indexOf(el) - 1; k >= 0; k--) {
       const under = elements[k];
+      if (under.frameId === slideId && under.type === "image" && contains(boxOf(under), cx, cy)) {
+        return { image: under };
+      }
       if (under.frameId === slideId && isFilled(under) && contains(boxOf(under), cx, cy)) {
         return under.backgroundColor;
       }
     }
     return background;
   };
+  /** the color behind a text (on a picture: the picture's average color there), and how to name it */
+  const colorBehind = async (el: any, slideId: string) => {
+    const behind = behindOf(el, slideId);
+    if (typeof behind === "string") {
+      return { color: behind, label: behind };
+    }
+    const color = await colorOfImage(behind.image, boxOf(el), files);
+    return color ? { color, label: `the picture ${behind.image.id} (about ${color} there)` } : null;
+  };
   /** huge, faint glyphs (a big quote mark, a watermark number) are decoration */
   const isDecoration = (el: any, slideId: string) =>
     el.type === "text" &&
-    (el.opacity <= 30 || (el.fontSize >= 96 && (contrast(el.strokeColor, behindOf(el, slideId)) ?? 99) < 1.6));
+    (el.opacity <= 30 ||
+      (el.fontSize >= 96 &&
+        (() => {
+          const behind = behindOf(el, slideId);
+          return typeof behind === "string" && (contrast(el.strokeColor, behind) ?? 99) < 1.6;
+        })()));
 
-  const report = slides.map((slide, index) => {
+  const report: any[] = [];
+  for (const [index, slide] of slides.entries()) {
     const number = index + 1;
     const data = slideData(slide);
     const frameBox: Box = [slide.x, slide.y, slide.x + slide.width, slide.y + slide.height];
     const own = elements.filter((el) => el.frameId === slide.id);
     const content = own.filter((el) => !slideData(el).copyOf);
-    const add = (kind: string, message: string, id?: string) => issues.push({ slide: number, kind, message, ...(id ? { id } : {}) });
+    const add = (kind: string, message: string, id?: string) =>
+      ignores(id ? map.get(id) : slide, kind) || issues.push({ slide: number, kind, message, ...(id ? { id } : {}) });
 
     // cut off at the slide edge (frames clip their content)
     for (const el of own) {
@@ -188,12 +285,18 @@ export const checkDeck = async (
         if (a.containerId && a.containerId === b.containerId) {
           continue;
         }
+        // text on a picture is fine when drawn above it (its contrast is checked below)
+        if (b.type === "image" && elements.indexOf(b) < elements.indexOf(a)) {
+          continue;
+        }
         const boxB = boxOf(b);
         const shared = area(intersection(boxA, boxB));
-        if (shared > Math.min(area(boxA), area(boxB)) * 0.15 && shared > 50) {
+        if (shared > Math.min(area(boxA), area(boxB)) * 0.15 && shared > 50 && !ignores(b, "overlap")) {
           add(
             "overlap",
-            `text ${preview(a.text)} (${a.id}) overlaps ${b.type === "text" ? `text ${preview(b.text)}` : "image"} (${b.id})`,
+            b.type === "text"
+              ? `text ${preview(a.text)} (${a.id}) overlaps text ${preview(b.text)} (${b.id})`
+              : `text ${preview(a.text)} (${a.id}) is covered by image ${b.id} drawn on top of it`,
             a.id,
           );
         }
@@ -218,12 +321,12 @@ export const checkDeck = async (
         add("small-text", `text ${preview(smallest.text)} is ${smallest.size}px: hard to read on a projector (use ${MIN_FONT}px or more)`, el.id);
       }
       const box = boxOf(el);
-      const behind = behindOf(el, slide.id);
-      for (const piece of pieces.filter((p, i) => pieces.findIndex((q) => q.color === p.color && q.size >= 28 === p.size >= 28) === i)) {
-        const ratio = contrast(piece.color, behind);
+      const behind = await colorBehind(el, slide.id);
+      for (const piece of behind ? pieces.filter((p, i) => pieces.findIndex((q) => q.color === p.color && q.size >= 28 === p.size >= 28) === i) : []) {
+        const ratio = contrast(piece.color, behind!.color);
         const needed = piece.size >= 28 ? 3 : 4.5;
         if (ratio !== null && ratio < needed) {
-          add("contrast", `text ${preview(piece.text)} (${piece.color} on ${behind}) has contrast ${ratio.toFixed(1)}:1, below ${needed}:1`, el.id);
+          add("contrast", `text ${preview(piece.text)} (${piece.color} on ${behind!.label}) has contrast ${ratio.toFixed(1)}:1, below ${needed}:1`, el.id);
           break;
         }
       }
@@ -295,7 +398,7 @@ export const checkDeck = async (
       }
     }
 
-    return {
+    report.push({
       slide: number,
       id: slide.id,
       title: slideTitle(slide, index),
@@ -306,8 +409,8 @@ export const checkDeck = async (
       ...(data.skip ? { skip: true } : {}),
       ...(data.template === false ? { template: false } : {}),
       ...(data.hidden?.length ? { templateElementsRemoved: data.hidden.length } : {}),
-    };
-  });
+    });
+  }
 
   // a label must be on the same slide as its shape (else it is left out there)
   for (const el of elements as any[]) {

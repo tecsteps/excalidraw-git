@@ -31,8 +31,12 @@ const TROUBLESHOOTING = (app: string) => `## Troubleshooting
 - "GitHub is not connected": the user can connect it in the Scenes sidebar;
   until then, work with local-only scenes.
 - Local file paths (edit files, image src) and PDF export are not available
-  through the Kurviq MCP: upload images (see "Images from your machine"); the
-  user exports PDFs in Kurviq (Slides sidebar → PDF).
+  through the Kurviq MCP: upload images and big edits (see "Images from your
+  machine"); the user exports PDFs in Kurviq (Slides sidebar → PDF).
+- "The Kurviq tab did not answer": the edit may still land. Call it again
+  with the same \`requestId\` (it is never applied twice), and check
+  \`app_status\` → \`health\`. A browser may pause a tab in the background:
+  ask the user to bring Kurviq to the front.
 `;
 
 const UPLOADS = (uploadUrl: string) => `## Images from your machine (photos, illustrations, screenshots)
@@ -53,6 +57,18 @@ Then \`edit_scene\` (or \`save_scene\`) with
 WebP for photos (the scene file carries the image). The upload goes straight
 to the user's open Kurviq tab, which keeps it until a scene uses it (the same
 fileId can be used on many slides). http(s) URLs as \`src\` work too.
+
+**Big edits** (many elements, a whole deck): don't paste them into a tool
+call. Write \`{ "add": [...], "update": [...], "delete": [...] }\` (or just an
+array of elements to add) to a JSON file and upload it the same way:
+
+\`\`\`
+curl -s --data-binary @edit.json ${uploadUrl}
+→ { "payloadId": "9c1e…", "add": 120, "update": 4, "delete": 0 }
+\`\`\`
+
+then \`edit_scene(name, payloadId: "9c1e…", basedOn: …)\` (or
+\`save_scene(name, payloadId: …)\` for a new scene). Up to 1 MB per payload.
 This upload URL is the one HTTP call you make yourself; everything else goes
 through the tools.
 `;
@@ -82,6 +98,14 @@ export const kurviqSkill = (app: string, uploadUrl = `${app}/mcp/<your key>/uplo
     .replace(/your headless Excalidraw/g, "the user's Kurviq tab")
     .replace(/\s*\(localhost:3101\)/g, "")
     .replace(/the scenes server's HTTP API/g, "Kurviq's or GitHub's HTTP API")
-    .replace(/absolute file path,\s+/g, "");
+    .replace(/absolute file path,\s+/g, "")
+    .replace(
+      /- \*\*Big edits:\*\* write[\s\S]*?instead of pasting it into the call\./,
+      '- **Big edits:** upload them as JSON and pass \`payloadId\` (see "Images from your machine").',
+    )
+    .replace(
+      /- PDF: \`export_pdf\(name\)\`[\s\S]*?selectable text\./,
+      "- PDF: the user exports the deck in Kurviq (Slides sidebar → PDF).",
+    );
   return `${text.trimEnd()}\n\n${UPLOADS(uploadUrl)}\n${TROUBLESHOOTING(app)}`;
 };
