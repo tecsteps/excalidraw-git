@@ -401,6 +401,8 @@ const StepPicker = () => {
 
 const ThemeForm = () => {
   const { theme, templateId } = useDeck();
+  // fonts the user added are deck fonts too (a hook: before any early return)
+  useSyncExternalStore(customFonts.subscribe, customFonts.version);
   if (!templateId) {
     return (
       <section className="slides-details">
@@ -415,8 +417,6 @@ const ThemeForm = () => {
       </section>
     );
   }
-  // fonts the user added are deck fonts too
-  useSyncExternalStore(customFonts.subscribe, customFonts.version);
   const select = <K extends keyof DeckTheme>(key: K, options: Array<[string, DeckTheme[K]]>) => (
     <select
       className="slides-input"
