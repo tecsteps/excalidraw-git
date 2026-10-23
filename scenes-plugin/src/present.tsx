@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
 
-import { deck } from "./deck";
+import { PRESENTING_KEY, deck } from "./deck";
 import { elementStep, getSlides, getTheme, slideData } from "./slides";
 
 import type { Frame } from "./slides";
@@ -116,6 +116,9 @@ class Presenter {
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     document.body.classList.add("slides-presenting");
+    try {
+      localStorage.setItem(PRESENTING_KEY, "1");
+    } catch {}
     this.wasFullscreen = false;
     document.documentElement
       .requestFullscreen?.()
@@ -147,6 +150,9 @@ class Presenter {
     api.setActiveTool({ type: "selection" });
     api.updateScene({ appState: (this.saved || {}) as any, captureUpdate: CaptureUpdateAction.NEVER });
     document.body.classList.remove("slides-presenting");
+    try {
+      localStorage.removeItem(PRESENTING_KEY);
+    } catch {}
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }

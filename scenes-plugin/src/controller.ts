@@ -891,7 +891,10 @@ class ScenesController {
   private checkOpenedScene(name: string) {
     const api = this.requireApi();
     const token = ++this.openToken;
-    this.openLock = { token, viewMode: api.getAppState().viewModeEnabled };
+    // a scene opened while the last one is still being checked: the mode from
+    // before that check comes back, not the check's own view mode (else the
+    // editor would stay read-only)
+    this.openLock = { token, viewMode: this.openLock?.viewMode ?? api.getAppState().viewModeEnabled };
     api.updateScene({ appState: { viewModeEnabled: true }, captureUpdate: CaptureUpdateAction.NEVER });
     this.setState({ checking: true });
     const release = () => {

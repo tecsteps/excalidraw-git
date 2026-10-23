@@ -48,6 +48,9 @@ export type DeckState = {
 
 const THUMB_WIDTH = 480;
 
+/** set while a presentation runs (see present.tsx): a page that went away mid-presentation is cleaned up */
+export const PRESENTING_KEY = "kurviq-presenting";
+
 class Deck {
   private api: ExcalidrawImperativeAPI | null = null;
   private listeners = new Set<() => void>();
@@ -82,6 +85,14 @@ class Deck {
       return;
     }
     this.api = api;
+    // the page went away during a presentation (reload, update): Excalidraw
+    // keeps zen mode, which would hide the whole editor UI from now on
+    try {
+      if (localStorage.getItem(PRESENTING_KEY)) {
+        localStorage.removeItem(PRESENTING_KEY);
+        api.updateScene({ appState: { zenModeEnabled: false } });
+      }
+    } catch {}
     api.onChange((elements, appState) => {
       this.onChange(elements);
       this.onSelection(elements, appState.selectedElementIds);
