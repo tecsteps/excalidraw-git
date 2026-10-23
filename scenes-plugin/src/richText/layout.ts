@@ -401,8 +401,10 @@ export const elementLayout = (element: TextElementLike) => {
   const wraps = !!element.containerId || !element.autoResize;
   const layout = layoutRich(element, doc, wraps ? element.width + 1 : null);
   // laid out 1px wider than the element (so no line wraps earlier than it
-  // did): centered and right-aligned lines move back by that
-  const shift = !wraps ? 0 : element.textAlign === "center" ? -0.5 : element.textAlign === "right" ? -1 : 0;
+  // did): centered and right-aligned lines move back by that; a text that
+  // doesn't wrap aligns inside its box, like plain text (the box may be wider)
+  const extra = wraps ? -1 : element.width - layout.width;
+  const shift = element.textAlign === "center" ? extra / 2 : element.textAlign === "right" ? extra : 0;
   return { layout, shift };
 };
 

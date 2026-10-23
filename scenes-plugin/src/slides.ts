@@ -22,8 +22,7 @@ import {
   newElementWith,
   restoreElements,
 } from "@excalidraw/excalidraw";
-import { duplicateElements, measureText, refreshTextDimensions, syncInvalidIndices } from "@excalidraw/element";
-import { getFontString } from "@excalidraw/common";
+import { duplicateElements, refreshTextDimensions, syncInvalidIndices } from "@excalidraw/element";
 
 import type {
   ExcalidrawElement,
@@ -283,16 +282,23 @@ const makeCopy = (
   return copy;
 };
 
-/** re-measure texts whose placeholders were filled, keeping their alignment */
+/**
+ * re-measure texts whose placeholders were filled, keeping their alignment; a
+ * box of a fixed width (`autoResize: false`) keeps the template's width and
+ * wraps again inside it
+ */
 const measureTexts = (copies: any[]) =>
   copies.map((el) => {
     if (el.type !== "text" || el.containerId) {
       return el;
     }
-    const next = measureText(el.text, getFontString(el), el.lineHeight);
+    const next: any = refreshTextDimensions(el, null, new Map() as any, el.originalText ?? el.text) || el;
+    if (el.autoResize === false) {
+      return { ...el, text: next.text, height: next.height };
+    }
     const shift = el.width - next.width;
     const x = el.textAlign === "right" ? el.x + shift : el.textAlign === "center" ? el.x + shift / 2 : el.x;
-    return { ...el, width: next.width, height: next.height, x };
+    return { ...el, text: next.text, width: next.width, height: next.height, x };
   });
 
 export type SyncResult = { elements: ExcalidrawElement[]; changed: number } | null;

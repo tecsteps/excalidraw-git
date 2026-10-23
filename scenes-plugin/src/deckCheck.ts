@@ -272,6 +272,22 @@ export const checkDeck = async (
         if (height > max + 1) {
           add("overflow", `label ${preview(any.text)} of ${container.id} needs ${round(height)}px but the shape has room for ${round(max)}px: make the shape taller or the text shorter`, el.id);
         }
+      } else if (el.type === "text" && !el.angle) {
+        // a free text bigger than its own box: the browser cuts it off at the box
+        // (renders and PDFs don't), e.g. after a font change measured with another font
+        const dims: any = refreshTextDimensions(any, null, map, any.originalText ?? any.text) || {};
+        const width =
+          any.autoResize === false
+            ? (refreshTextDimensions({ ...any, autoResize: true }, null, map, dims.text ?? any.text) as any)?.width ?? el.width
+            : dims.width ?? el.width;
+        const height = dims.height ?? el.height;
+        if (width > el.width + 2 || height > el.height + 2) {
+          add(
+            "text-box",
+            `text ${preview(any.text)} needs ${round(width)}×${round(height)}px but its box is ${round(el.width)}×${round(el.height)}px: the user's browser cuts it off. Update it with "autoResize": true (one line, grows with the text) or a "width" (wraps at it)`,
+            el.id,
+          );
+        }
       }
     }
 
