@@ -662,13 +662,16 @@ export const SlidesSidebar = () => {
               </button>
             </div>
             {panel === "pdf" && <PdfPanel onClose={() => setPanel(null)} />}
-            {panel === "style" && <ThemeForm />}
-            <SlideList />
-            <p className="slides-hint">
-              Drag to reorder.
-            </p>
-            <StepPicker />
-            {active && <SlideDetails id={active} />}
+            {panel === "style" ? (
+              <ThemeForm />
+            ) : (
+              <>
+                <SlideList />
+                <p className="slides-hint">Drag to reorder.</p>
+                <StepPicker />
+                {active && <SlideDetails id={active} />}
+              </>
+            )}
           </>
         )}
       </div>
