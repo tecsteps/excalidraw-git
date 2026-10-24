@@ -195,7 +195,6 @@ const PdfPanel = () => {
         </button>
       </div>
       {error && <p className="slides-hint slides-hint--error">{error}</p>}
-      <p className="slides-hint">Text stays text: selectable and searchable in the PDF.</p>
     </section>
   );
 };
