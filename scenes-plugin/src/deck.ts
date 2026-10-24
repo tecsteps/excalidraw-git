@@ -105,7 +105,9 @@ class Deck {
     api.onChange((elements, appState) => {
       this.onChange(elements);
       this.onSelection(elements, appState.selectedElementIds);
+      this.scheduleFrameLabels();
     });
+    api.onScrollChange(() => this.scheduleFrameLabels());
     this.onChange(api.getSceneElementsIncludingDeleted());
   }
 
@@ -246,6 +248,39 @@ class Deck {
       });
     }
     this.lastTemplateKey = templateKey(api.getSceneElementsIncludingDeleted(), this.deckName());
+  }
+
+  // ---------------------------------------------------------------------------
+  // the template's name behind each slide's name on the canvas: Excalidraw's
+  // frame name labels get it as data-template (shown by CSS), left out where
+  // the label would no longer fit (zoomed out)
+  // ---------------------------------------------------------------------------
+
+  private labelFrame = 0;
+
+  private scheduleFrameLabels() {
+    cancelAnimationFrame(this.labelFrame);
+    // after Excalidraw rendered the labels
+    this.labelFrame = requestAnimationFrame(() => this.labelFrames());
+  }
+
+  private labelFrames() {
+    const names = new Map(this.state.templates.map((t) => [t.id, t.name]));
+    for (const slide of this.state.slides) {
+      const label = document.querySelector<HTMLElement>(`.frame-name[id$="-frame-name-${CSS.escape(slide.id)}"]`);
+      if (!label) {
+        continue;
+      }
+      const name = slide.layout ? names.get(slide.layout) : undefined;
+      if (!name) {
+        delete label.dataset.template;
+        continue;
+      }
+      label.dataset.template = name;
+      if (label.scrollWidth > label.clientWidth + 1) {
+        delete label.dataset.template;
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

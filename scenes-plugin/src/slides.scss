@@ -812,6 +812,12 @@ body.slides-presenting {
   }
 }
 
+// the template a slide uses, behind its name on the canvas (deck.ts)
+.excalidraw .frame-name[data-template]::after {
+  content: " (" attr(data-template) ")";
+  opacity: 0.55;
+}
+
 // "apply your changes to all slides?" after editing a template (slidesUI.tsx)
 .slides-question {
   position: fixed;
