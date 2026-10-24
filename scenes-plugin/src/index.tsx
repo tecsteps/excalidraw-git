@@ -261,14 +261,20 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
         <span className="scenes-pill__name">{current ?? UNTITLED_LABEL}</span>
         {currentItem && <ScenePlace item={currentItem} />}
         {state.checking ? (
-          <span className="scenes-pill__status" title="Local copy, read-only while GitHub is checked">checking…</span>
+          <QuickTip tip="Local copy, read-only while GitHub is checked" className="scenes-pill__status" label={false}>
+            checking…
+          </QuickTip>
         ) : busy === "saving" || state.sync.running ? (
           <span className="scenes-pill__status">syncing…</span>
         ) : (
           // "local" / "local-only": the browser icon says it
           !["synced", "local", "local-only"].includes(status) && <StatusBadge status={status} compact />
         )}
-        {offline && <span className="scenes-pill__offline" title="Offline — working locally">offline</span>}
+        {offline && (
+          <QuickTip tip="Offline: you keep working here, it syncs once you are back online" className="scenes-pill__offline" label={false}>
+            offline
+          </QuickTip>
+        )}
         <span className="scenes-pill__caret" aria-hidden>▾</span>
       </button>
       {open && (
@@ -297,7 +303,6 @@ const ScenesTopRightUI = ({ isMobile }: { isMobile: boolean }) => {
         <button
           type="button"
           className="scenes-pill scenes-pill--primary"
-          title="Present this scene from the first slide (Esc ends)"
           onClick={() => presenter.start()}
         >
           <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden>
@@ -309,7 +314,6 @@ const ScenesTopRightUI = ({ isMobile }: { isMobile: boolean }) => {
       <button
         type="button"
         className="scenes-pill scenes-slides-btn"
-        title="Slides: present this scene, edit the deck"
         onClick={() => api?.toggleSidebar({ name: SLIDES_SIDEBAR_NAME })}
       >
         <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
@@ -435,7 +439,6 @@ const SceneSwitcher = ({ onClose, onManage }: { onClose: () => void; onManage: (
           <button
             type="button"
             className="scenes-switcher__clear"
-            title="Clear the filter (show all scenes)"
             aria-label="Clear the filter"
             onClick={() => {
               setSceneFilter("");
@@ -748,7 +751,7 @@ const NameForm = ({
         }}
       />
       {offersLocalOnly && (
-        <label className="scenes-form__check" title="Kept only in this browser. You can sync it later (scene settings below).">
+        <label className="scenes-form__check">
           <input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} />
           Local only (not synced to GitHub)
         </label>
@@ -948,7 +951,6 @@ const SceneRow = ({
             type="button"
             className={clsx("scenes-item__more", { "scenes-item__more--open": menuOpen })}
             disabled={disabled}
-            title="Rename, duplicate or delete"
             aria-label={`Actions for ${item.name}`}
             onClick={() => onMenu(!menuOpen)}
           >
@@ -1184,9 +1186,9 @@ export const ScenesSidebar = () => {
           <div className="scenes-list-header">
             <span>{filter.trim() ? "Scenes" : "All scenes"}</span>
             {filter.trim() && (
-              <span className="scenes-filter-chip" title="Set in the scene switcher (top left)">
+              <span className="scenes-filter-chip">
                 filter: {filter.trim()}
-                <button type="button" aria-label="Clear the filter" title="Clear the filter" onClick={() => setSceneFilter("")}>
+                <button type="button" aria-label="Clear the filter" onClick={() => setSceneFilter("")}>
                   ×
                 </button>
               </span>

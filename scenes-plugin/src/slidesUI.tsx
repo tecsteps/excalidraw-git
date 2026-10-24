@@ -12,6 +12,7 @@ import { customFonts } from "./fonts";
 import { optimizeImages, pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { IS_ONLINE } from "./api";
 import { SlidesShare } from "./online/ui";
+import { QuickTip } from "./quickTip";
 import { presenter } from "./present";
 import { setSlideParam } from "./router";
 import {
@@ -173,7 +174,7 @@ const PdfPanel = () => {
           Include skipped slides
         </label>
       )}
-      <label className="slides-check" title="Pictures at twice their size on the slide, JPEG where they have no transparency">
+      <label className="slides-check">
         <input type="checkbox" checked={compress} onChange={(event) => setCompress(event.target.checked)} />
         Smaller file (no visible loss)
       </label>
@@ -218,7 +219,7 @@ const SlideList = () => {
     }
   }, [slides]);
 
-  /** ↑ / ↓ on a slide: one place up or down in the deck */
+  /** ⌥↑ / ⌥↓ on a slide: one place up or down in the deck */
   const moveBy = (id: string, delta: number) => {
     const to = slides.findIndex((s) => s.id === id) + delta;
     if (to < 0 || to >= slides.length) {
@@ -228,6 +229,18 @@ const SlideList = () => {
     moveSlides(api(), [id], to);
     deck.setActive(id);
     setSlideParam(to + 1);
+  };
+
+  /** ↑ / ↓ on a slide: show the previous / next one (its card takes the focus) */
+  const goBy = (id: string, delta: number) => {
+    const target = slides[slides.findIndex((s) => s.id === id) + delta];
+    if (!target) {
+      return;
+    }
+    focusFrame(target.id);
+    const button = document.querySelector<HTMLElement>(`[data-slide-open="${CSS.escape(target.id)}"]`);
+    button?.focus();
+    button?.scrollIntoView({ block: "nearest" });
   };
 
   const drop = (targetId: string) => {
@@ -245,7 +258,6 @@ const SlideList = () => {
         <button
           type="button"
           className="slides-add"
-          title="Add a slide after the selected one (or at the end)"
           onClick={() => {
             const id = addSlide(api(), activeId ?? undefined);
             setTimeout(() => focusFrame(id), 50);
@@ -288,27 +300,29 @@ const SlideList = () => {
           })}
         >
           <span className="slides-card__actions">
-            <button
-              type="button"
-              title="Duplicate this slide"
-              aria-label={`Duplicate slide ${slide.index + 1}`}
-              onClick={() => {
-                const [copy] = duplicateSlides(api(), [slide.id]);
-                if (copy) {
-                  setTimeout(() => focusFrame(copy), 50);
-                }
-              }}
-            >
-              ⧉
-            </button>
-            <button
-              type="button"
-              title="Delete this slide (undo with ⌘Z)"
-              aria-label={`Delete slide ${slide.index + 1}`}
-              onClick={() => window.confirm(`Delete slide ${slide.index + 1} “${slide.title}” with everything on it?`) && deleteSlides(api(), [slide.id])}
-            >
-              ×
-            </button>
+            <QuickTip tip="Duplicate" label={false}>
+              <button
+                type="button"
+                aria-label={`Duplicate slide ${slide.index + 1}`}
+                onClick={() => {
+                  const [copy] = duplicateSlides(api(), [slide.id]);
+                  if (copy) {
+                    setTimeout(() => focusFrame(copy), 50);
+                  }
+                }}
+              >
+                ⧉
+              </button>
+            </QuickTip>
+            <QuickTip tip="Delete (undo with ⌘Z)" label={false}>
+              <button
+                type="button"
+                aria-label={`Delete slide ${slide.index + 1}`}
+                onClick={() => window.confirm(`Delete slide ${slide.index + 1} “${slide.title}” with everything on it?`) && deleteSlides(api(), [slide.id])}
+              >
+                ×
+              </button>
+            </QuickTip>
           </span>
           <button
             type="button"
@@ -316,14 +330,18 @@ const SlideList = () => {
             data-slide-open={slide.id}
             onClick={() => focusFrame(slide.id)}
             onKeyDown={(event) => {
-              if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.altKey && !event.metaKey && !event.ctrlKey) {
+              if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.metaKey && !event.ctrlKey) {
                 // not the canvas's arrow keys (they would nudge the selected frame)
                 event.preventDefault();
                 event.stopPropagation();
-                moveBy(slide.id, event.key === "ArrowUp" ? -1 : 1);
+                const delta = event.key === "ArrowUp" ? -1 : 1;
+                if (event.altKey) {
+                  moveBy(slide.id, delta); // ⌥↑ / ⌥↓: one place up or down in the deck
+                } else {
+                  goBy(slide.id, delta); // ↑ / ↓: the previous / next slide
+                }
               }
             }}
-            title="Show this slide (↑ / ↓ moves it in the deck)"
           >
             <span className="slides-card__num">{slide.index + 1}</span>
             <span className="slides-card__thumb">{thumbs[slide.id] ? <img src={thumbs[slide.id]} alt="" /> : null}</span>
@@ -413,14 +431,11 @@ const SlideDetails = ({ id }: { id: string }) => {
         <button type="button" className="slides-btn" onClick={() => addSlide(api(), id)}>
           + After
         </button>
-        <button
-          type="button"
-          className="slides-btn"
-          title="Template elements back as in the template, deck fonts and colors on all elements of this slide"
-          onClick={() => resetSlides([id])}
-        >
-          Reset to template
-        </button>
+        <QuickTip tip="Template elements back as in the template, deck fonts and colors on everything on this slide" label={false}>
+          <button type="button" className="slides-btn" onClick={() => resetSlides([id])}>
+            Reset to template
+          </button>
+        </QuickTip>
       </div>
     </section>
   );
@@ -511,18 +526,19 @@ const ThemeForm = () => {
         <button type="button" className="slides-btn" onClick={() => focusFrame(templateId, false)}>
           Edit template
         </button>
-        <button
-          type="button"
-          className="slides-btn"
-          title="Deck fonts and colors on every slide, template elements restored everywhere"
-          onClick={() => {
-            if (window.confirm("Apply the deck style to every slide? Fonts and colors you changed on single slides are reset.")) {
-              resetSlides(deck.getState().slides.map((s) => s.id));
-            }
-          }}
-        >
-          Reset all slides
-        </button>
+        <QuickTip tip="Deck fonts and colors on every slide, template elements restored everywhere" label={false}>
+          <button
+            type="button"
+            className="slides-btn"
+            onClick={() => {
+              if (window.confirm("Apply the deck style to every slide? Fonts and colors you changed on single slides are reset.")) {
+                resetSlides(deck.getState().slides.map((s) => s.id));
+              }
+            }}
+          >
+            Reset all slides
+          </button>
+        </QuickTip>
       </div>
       <p className="slides-hint">
         Placeholders: <code>{"{page}"}</code> <code>{"{total}"}</code> <code>{"{title}"}</code> <code>{"{deck}"}</code>{" "}
@@ -722,7 +738,7 @@ export const SlidesSidebar = () => {
             {shown === "slides" && (
               <>
                 <SlideList />
-                <p className="slides-hint">Drag to reorder.</p>
+                <p className="slides-hint">Drag or ⌥↑ / ⌥↓ to reorder.</p>
                 <StepPicker />
                 {active && <SlideDetails id={active} />}
               </>

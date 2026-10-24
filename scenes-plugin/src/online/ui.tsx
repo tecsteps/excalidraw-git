@@ -549,14 +549,11 @@ const SpaceSwitcher = () => {
           ))}
         </select>
       </label>
-      <button
-        type="button"
-        className="scenes-link kq-left"
-        title="Install the Kurviq app on an organization on GitHub; its members then share that space"
-        onClick={() => connectGitHub("install")}
-      >
-        Add an organization…
-      </button>
+      <QuickTip tip="Install the Kurviq app on an organization on GitHub; its members then share that space" label={false}>
+        <button type="button" className="scenes-link kq-left" onClick={() => connectGitHub("install")}>
+          Add an organization…
+        </button>
+      </QuickTip>
     </div>
   );
 };
@@ -1113,18 +1110,15 @@ export const McpButton = () => {
   const key = usePairingKey();
   return (
     <>
-      <button
-        type="button"
-        className="scenes-pill scenes-slides-btn"
-        title="Connect an AI agent (MCP) to Kurviq"
-        onClick={() => setOpen(true)}
-      >
-        <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
-          <path d="M7 3v4M13 3v4M5 7h10v3a5 5 0 0 1-10 0V7zM10 15v3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        MCP
-        {key && <span className="kq-dot" title="Agent access is on in this browser" />}
-      </button>
+      <QuickTip tip={key ? "Connect an AI agent (MCP). Agent access is on in this browser." : "Connect an AI agent (MCP)"} label={false}>
+        <button type="button" className="scenes-pill scenes-slides-btn" onClick={() => setOpen(true)}>
+          <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden>
+            <path d="M7 3v4M13 3v4M5 7h10v3a5 5 0 0 1-10 0V7zM10 15v3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          MCP
+          {key && <span className="kq-dot" />}
+        </button>
+      </QuickTip>
       {open && <McpDialog onClose={() => setOpen(false)} />}
     </>
   );
