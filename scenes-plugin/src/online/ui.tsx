@@ -629,24 +629,63 @@ const LINK_ICON = (
   </svg>
 );
 
-/** in the Slides sidebar: a link that opens the deck presenting */
-export const PresentationLink = () => {
+const togglePublic = (name: string, isPublic: boolean | undefined, repo: RepoChoice) => {
+  const ok = isPublic
+    ? window.confirm(
+        `Make "${name}" private again? It moves back to ${repo.owner}/${SCENES_REPO}. Note: what was public stays in the git history of ${repo.owner}/kurviq-public.`,
+      )
+    : window.confirm(
+        `Make "${name}" public? It moves to the public repository ${repo.owner}/kurviq-public: anyone can view it, including images and text on it, and it stays in that repository's git history.`,
+      );
+  if (ok) {
+    scenesController.setPublic(name, !isPublic).catch((error) => window.alert(error.message));
+  }
+};
+
+const visibilityTip = (isPublic: boolean | undefined, repo: RepoChoice) =>
+  isPublic
+    ? `Public now: anyone with the link can view it, without a GitHub account. "Make private" moves it back to your private ${repo.owner}/${SCENES_REPO}; then only people with access to that repository can open it.`
+    : `Private now: only people with access to ${repo.owner}/${SCENES_REPO} on GitHub can open it. "Make public" lets anyone with the link view it, without a GitHub account (it moves to the public repository ${repo.owner}/kurviq-public).`;
+
+/** the Slides sidebar's Share tab: who can open the links, the links, public / private */
+export const SlidesShare = () => {
   const { repo } = useConnection();
   const { current, list } = useSyncExternalStore(scenesController.subscribe, scenesController.getState);
-  const { slides } = useSyncExternalStore(deck.subscribe, deck.getState);
   const item = list.find((entry) => entry.name === current);
-  if (!slides.length) {
-    return null;
-  }
-  const shareable = repo && item && item.name !== null && !item.localOnly && item.onGitHub;
+  const shareable = !!repo && !!item && item.name !== null && !item.localOnly && item.onGitHub;
+  const name = item?.name ?? null;
   return (
-    <CopyLink
-      className="slides-btn"
-      link={shareable ? shareLink(repo.owner, item.name!, { present: true }) : null}
-      label="Share"
-      icon={LINK_ICON}
-      tip={shareTip(item, repo, "presentation")}
-    />
+    <section className="slides-details">
+      <p className="slides-hint">
+        {!shareable
+          ? shareTip(item, repo, "presentation")
+          : item!.public
+          ? "Public: anyone with the link can watch it, no sign-in needed."
+          : `Private: only people who can read ${repo!.owner}/${repo!.name} on GitHub can open the link, after signing in with GitHub.`}
+      </p>
+      <div className="slides-row">
+        <CopyLink
+          className="slides-btn slides-btn--primary"
+          link={shareable ? shareLink(repo!.owner, name!, { present: true }) : null}
+          label="Copy presentation link"
+          icon={LINK_ICON}
+          tip={shareTip(item, repo, "presentation")}
+        />
+        <CopyLink
+          className="slides-btn"
+          link={shareable ? shareLink(repo!.owner, name!) : null}
+          label="Copy scene link"
+          tip={shareTip(item, repo, "scene")}
+        />
+      </div>
+      {shareable && !repo!.readOnly && (
+        <QuickTip tip={visibilityTip(item!.public, repo!)} label={false}>
+          <button type="button" className="slides-btn" onClick={() => togglePublic(name!, item!.public, repo!)}>
+            {item!.public ? "Make private" : "Make public"}
+          </button>
+        </QuickTip>
+      )}
+    </section>
   );
 };
 
@@ -669,25 +708,19 @@ export const SceneSharing = ({ item, disabled }: { item: SceneListItem; disabled
         />
       )}
       {!repo.readOnly && (
-        <button
-          type="button"
-          className="scenes-link"
-          disabled={disabled}
-          onClick={() => {
-            const ok = item.public
-              ? window.confirm(
-                  `Make "${name}" private again? It moves back to ${repo.owner}/${SCENES_REPO}. Note: what was public stays in the git history of ${repo.owner}/kurviq-public.`,
-                )
-              : window.confirm(
-                  `Make "${name}" public? It moves to the public repository ${repo.owner}/kurviq-public: anyone can view it, including images and text on it, and it stays in that repository's git history.`,
-                );
-            if (ok) {
-              scenesController.setPublic(name, !item.public).catch((error) => window.alert(error.message));
-            }
-          }}
+        <QuickTip
+          label={false}
+          tip={visibilityTip(item.public, repo)}
         >
-          {item.public ? "Make private" : "Make public"}
-        </button>
+          <button
+            type="button"
+            className="scenes-link"
+            disabled={disabled}
+            onClick={() => togglePublic(name, item.public, repo)}
+          >
+            {item.public ? "Make private" : "Make public"}
+          </button>
+        </QuickTip>
       )}
     </>
   );

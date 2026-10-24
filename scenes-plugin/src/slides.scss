@@ -223,6 +223,55 @@
     border-top: 1px solid var(--default-border-color);
   }
 
+  // the first section of a tab: right under the tabs, no rule above it
+  .slides-tabs + .slides-details {
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .slides-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 3px;
+    border-radius: var(--border-radius-lg);
+    background: var(--color-surface-low, var(--color-gray-10));
+  }
+
+  .slides-tabs__tab {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    height: 2rem;
+    padding: 0 0.3rem;
+    border: none;
+    border-radius: var(--border-radius-md);
+    background: none;
+    color: var(--color-gray-70, var(--text-primary-color));
+    font-family: inherit;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    cursor: pointer;
+
+    svg {
+      flex: none;
+    }
+
+    &:hover {
+      color: var(--color-primary);
+    }
+
+    &[aria-selected="true"] {
+      background: var(--island-bg-color);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      color: var(--color-primary);
+      font-weight: 600;
+    }
+  }
+
   .slides-section__title {
     color: var(--color-gray-50);
     font-size: 0.7rem;

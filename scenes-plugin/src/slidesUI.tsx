@@ -3,6 +3,7 @@
 
 import { CaptureUpdateAction, FONT_FAMILY, Sidebar, newElementWith } from "@excalidraw/excalidraw";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import clsx from "clsx";
 
 import { scenesController } from "./controller";
@@ -10,7 +11,7 @@ import { deck } from "./deck";
 import { customFonts } from "./fonts";
 import { optimizeImages, pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { IS_ONLINE } from "./api";
-import { PresentationLink } from "./online/ui";
+import { SlidesShare } from "./online/ui";
 import { presenter } from "./present";
 import { setSlideParam } from "./router";
 import {
@@ -134,7 +135,7 @@ const exportPdf = async (
 };
 
 /** PDF of the whole deck, the current slide or picked slides */
-const PdfPanel = ({ onClose }: { onClose: () => void }) => {
+const PdfPanel = () => {
   const { slides, activeId } = useDeck();
   const current = slides.find((s) => s.id === activeId);
   const [choice, setChoice] = useState<PdfChoice>(current ? "current" : "all");
@@ -147,7 +148,6 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
   const spec = choice === "all" ? "all" : choice === "current" ? String((current?.index ?? 0) + 1) : pick;
   return (
     <section className="slides-details slides-pdf">
-      <div className="slides-section__title">Export PDF</div>
       <label className="slides-check">
         <input type="radio" checked={choice === "all"} onChange={() => setChoice("all")} />
         Whole deck ({shown} slide{shown === 1 ? "" : "s"})
@@ -185,7 +185,6 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
           onClick={() => {
             setError(null);
             exportPdf(spec, { includeSkipped, compress }, setBusy)
-              .then(onClose)
               .catch((err) => {
                 setBusy(null);
                 setError(err.message);
@@ -193,9 +192,6 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
           }}
         >
           {busy ?? "Download PDF"}
-        </button>
-        <button type="button" className="slides-btn" onClick={onClose}>
-          Cancel
         </button>
       </div>
       {error && <p className="slides-hint slides-hint--error">{error}</p>}
@@ -602,12 +598,103 @@ const SlidesEmpty = () => (
   </section>
 );
 
+type SlidesTab = "slides" | "style" | "share" | "pdf";
+
+/** the sidebar's tab: kept outside the sidebar, which unmounts when closed; set by the template watcher too */
+const slidesTab = (() => {
+  let tab: SlidesTab = "slides";
+  const listeners = new Set<() => void>();
+  return {
+    get: () => tab,
+    set: (next: SlidesTab) => {
+      tab = next;
+      listeners.forEach((listener) => listener());
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+})();
+
+// editing the template (something on it selected): the Style tab opens;
+// back on a slide, the slide list returns (if it was opened this way)
+{
+  let lastActive: string | null = null;
+  let openedForTemplate = false;
+  deck.subscribe(() => {
+    const { activeId, templateId } = deck.getState();
+    if (activeId === lastActive || deck.paused) {
+      return;
+    }
+    const was = lastActive;
+    lastActive = activeId;
+    if (templateId && activeId === templateId) {
+      openedForTemplate = slidesTab.get() !== "style";
+      slidesTab.set("style");
+      const api = deck.getApi();
+      if (api && api.getAppState().openSidebar?.name !== SLIDES_SIDEBAR_NAME) {
+        api.toggleSidebar({ name: SLIDES_SIDEBAR_NAME, force: true });
+      }
+    } else if (was && was === templateId && openedForTemplate && slidesTab.get() === "style") {
+      openedForTemplate = false;
+      slidesTab.set("slides");
+    }
+  });
+}
+
+const icon = (children: ReactNode) => (
+  <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    {children}
+  </svg>
+);
+
+const TABS: Array<{ tab: SlidesTab; label: string; icon: ReactNode; online?: boolean }> = [
+  {
+    tab: "slides",
+    label: "Slides",
+    icon: icon(
+      <>
+        <rect x="2.5" y="5.5" width="12" height="9" rx="1.3" />
+        <path d="M5.5 3h10.2c1 0 1.8.8 1.8 1.8V12" />
+      </>,
+    ),
+  },
+  {
+    tab: "style",
+    label: "Style",
+    icon: icon(
+      <>
+        <path d="M10 2.8a7.2 7.2 0 0 0 0 14.4c1 0 1.6-.7 1.6-1.5 0-.9-.7-1.2-.7-2 0-.8.6-1.3 1.4-1.3h1.6a3.3 3.3 0 0 0 3.3-3.3c0-3.5-3.2-6.3-7.2-6.3z" />
+        <circle cx="6.4" cy="9.6" r="1.1" fill="currentColor" stroke="none" />
+        <circle cx="8.9" cy="6.3" r="1.1" fill="currentColor" stroke="none" />
+        <circle cx="12.7" cy="6.8" r="1.1" fill="currentColor" stroke="none" />
+      </>,
+    ),
+  },
+  {
+    tab: "share",
+    label: "Share",
+    online: true,
+    icon: icon(
+      <path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9m1.3 3.9a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9" />,
+    ),
+  },
+  {
+    tab: "pdf",
+    label: "PDF",
+    icon: icon(<path d="M10 3v9m0 0-3.5-3.5M10 12l3.5-3.5M4 14.5V16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1.5" />),
+  },
+];
+
 export const SlidesSidebar = () => {
   const { slides, activeId } = useDeck();
-  /** the panel under the buttons: PDF export or the deck's template and style */
-  const [panel, setPanel] = useState<"pdf" | "style" | null>(null);
-  const toggle = (which: "pdf" | "style") => setPanel(panel === which ? null : which);
+  const tab = useSyncExternalStore(slidesTab.subscribe, slidesTab.get);
   const active = slides.find((s) => s.id === activeId) ? activeId : null;
+  const tabs = TABS.filter((entry) => !entry.online || IS_ONLINE);
+  const shown = tabs.some((entry) => entry.tab === tab) ? tab : "slides";
   return (
     <Sidebar name={SLIDES_SIDEBAR_NAME} className="slides-sidebar">
       <Sidebar.Header>
@@ -618,53 +705,22 @@ export const SlidesSidebar = () => {
           <SlidesEmpty />
         ) : (
           <>
-            <div className="slides-row">
-              {IS_ONLINE && <PresentationLink />}
-              <button
-                type="button"
-                className="slides-btn"
-                disabled={!slides.length}
-                aria-pressed={panel === "pdf"}
-                onClick={() => toggle("pdf")}
-              >
-                <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
-                  <path
-                    d="M10 3v9m0 0-3.5-3.5M10 12l3.5-3.5M4 14.5V16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                PDF
-              </button>
-              <button
-                type="button"
-                className="slides-btn"
-                aria-pressed={panel === "style"}
-                onClick={() => toggle("style")}
-                title="Template (header, footer, logo) and the deck's fonts and colors"
-              >
-                <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
-                  <path
-                    d="M10 2.8a7.2 7.2 0 0 0 0 14.4c1 0 1.6-.7 1.6-1.5 0-.9-.7-1.2-.7-2 0-.8.6-1.3 1.4-1.3h1.6a3.3 3.3 0 0 0 3.3-3.3c0-3.5-3.2-6.3-7.2-6.3z"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinejoin="round"
-                  />
-                  <circle cx="6.4" cy="9.6" r="1.1" fill="currentColor" />
-                  <circle cx="8.9" cy="6.3" r="1.1" fill="currentColor" />
-                  <circle cx="12.7" cy="6.8" r="1.1" fill="currentColor" />
-                </svg>
-                Style
-              </button>
+            <div className="slides-tabs" role="tablist">
+              {tabs.map((entry) => (
+                <button
+                  key={entry.tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={shown === entry.tab}
+                  className="slides-tabs__tab"
+                  onClick={() => slidesTab.set(entry.tab)}
+                >
+                  {entry.icon}
+                  {entry.label}
+                </button>
+              ))}
             </div>
-            {panel === "pdf" && <PdfPanel onClose={() => setPanel(null)} />}
-            {panel === "style" ? (
-              <ThemeForm />
-            ) : (
+            {shown === "slides" && (
               <>
                 <SlideList />
                 <p className="slides-hint">Drag to reorder.</p>
@@ -672,6 +728,9 @@ export const SlidesSidebar = () => {
                 {active && <SlideDetails id={active} />}
               </>
             )}
+            {shown === "style" && <ThemeForm />}
+            {shown === "share" && <SlidesShare />}
+            {shown === "pdf" && <PdfPanel />}
           </>
         )}
       </div>

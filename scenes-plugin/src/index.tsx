@@ -1141,20 +1141,33 @@ export const ScenesSidebar = () => {
 
           {current !== null && !currentPrompt && currentItem && (
             <div className="scenes-current__manage">
-              <button type="button" className="scenes-link" disabled={isBusy} onClick={() => setPrompt({ mode: "rename", scene: current })}>
-                Rename
-              </button>
-              <button type="button" className="scenes-link" disabled={isBusy} onClick={() => setPrompt({ mode: "duplicate", scene: current })}>
-                Duplicate
-              </button>
-              <button
-                type="button"
-                className="scenes-link scenes-link--danger"
-                disabled={isBusy}
-                onClick={() => confirmDelete(currentItem) && scenesController.remove(current).catch(ignore)}
+              <QuickTip tip="Give this scene a new name (its link changes too)" label={false}>
+                <button type="button" className="scenes-link" disabled={isBusy} onClick={() => setPrompt({ mode: "rename", scene: current })}>
+                  Rename
+                </button>
+              </QuickTip>
+              <QuickTip tip="Make a copy of this scene under a new name" label={false}>
+                <button type="button" className="scenes-link" disabled={isBusy} onClick={() => setPrompt({ mode: "duplicate", scene: current })}>
+                  Duplicate
+                </button>
+              </QuickTip>
+              <QuickTip
+                tip={
+                  currentItem.onGitHub
+                    ? "Delete this scene, also on GitHub (its git history keeps the old versions)"
+                    : "Delete this scene from this browser"
+                }
+                label={false}
               >
-                Delete
-              </button>
+                <button
+                  type="button"
+                  className="scenes-link scenes-link--danger"
+                  disabled={isBusy}
+                  onClick={() => confirmDelete(currentItem) && scenesController.remove(current).catch(ignore)}
+                >
+                  Delete
+                </button>
+              </QuickTip>
               {IS_ONLINE && <SceneSharing item={currentItem} disabled={isBusy} />}
             </div>
           )}
