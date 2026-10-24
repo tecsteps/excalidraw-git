@@ -12,7 +12,6 @@ import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport"
 import { IS_ONLINE } from "./api";
 import { PresentationLink } from "./online/ui";
 import { presenter } from "./present";
-import { slideSorter } from "./slideSorter";
 import { setSlideParam } from "./router";
 import {
   addSlide,
@@ -319,6 +318,22 @@ const SlideList = () => {
           </button>
         </li>
       ))}
+      <li>
+        <button
+          type="button"
+          className="slides-add"
+          title="Add a slide after the selected one (or at the end)"
+          onClick={() => {
+            const id = addSlide(api(), activeId ?? undefined);
+            setTimeout(() => focusFrame(id), 50);
+          }}
+        >
+          <span className="slides-add__plus" aria-hidden="true">
+            +
+          </span>
+          Add slide
+        </button>
+      </li>
     </ol>
   );
 };
@@ -451,8 +466,7 @@ const ThemeForm = () => {
       <section className="slides-details">
         <div className="slides-section__title">Template &amp; style</div>
         <p className="slides-hint">
-          One template frame for the whole deck: put header, footer, logo or a background in it, and they appear on every slide.
-          It also holds the deck's fonts and colors.
+          Header, footer and logo for every slide.
         </p>
         <button type="button" className="slides-btn slides-btn--primary" onClick={() => focusFrame(createTemplate(api()), false)}>
           Create template
@@ -576,10 +590,6 @@ const SlidesEmpty = () => (
     <button type="button" className="slides-btn slides-btn--primary slides-empty__cta" onClick={startPresentation}>
       Start a presentation
     </button>
-    <p className="slides-hint">
-      Adds the first slide next to your drawing, and a template for header, footer and page numbers. You can also draw
-      frames with the frame tool (F).
-    </p>
   </section>
 );
 
@@ -605,28 +615,12 @@ export const SlidesSidebar = () => {
                 onClick={() => presenter.start(active ?? undefined)}
                 title="Present (Esc ends)"
               >
-                ▶ Present
+                <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden>
+                  <path d="M5 3.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8A.8.8 0 0 0 5 3.2z" fill="currentColor" />
+                </svg>
+                Present
               </button>
               {IS_ONLINE && <PresentationLink />}
-              <button
-                type="button"
-                className="slides-btn"
-                onClick={() => {
-                  const id = addSlide(api(), active ?? undefined);
-                  setTimeout(() => focusFrame(id), 50);
-                }}
-              >
-                + Slide
-              </button>
-              <button
-                type="button"
-                className="slides-btn"
-                disabled={slides.length < 1}
-                onClick={() => slideSorter.open()}
-                title="All slides as a grid: drag to reorder, duplicate, delete"
-              >
-                Sort
-              </button>
               <button
                 type="button"
                 className="slides-btn"
@@ -634,13 +628,23 @@ export const SlidesSidebar = () => {
                 aria-pressed={pdfOpen}
                 onClick={() => setPdfOpen(!pdfOpen)}
               >
+                <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
+                  <path
+                    d="M10 3v9m0 0-3.5-3.5M10 12l3.5-3.5M4 14.5V16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 PDF
               </button>
             </div>
             {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
             <SlideList />
             <p className="slides-hint">
-              Drag slides to reorder them (or click one and press ↑ / ↓), or open “Sort” for all slides at once.
+              Drag to reorder.
             </p>
             <StepPicker />
             {active && <SlideDetails id={active} />}

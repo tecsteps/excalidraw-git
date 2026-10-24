@@ -5,7 +5,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
-    padding: 0 0.9rem 1.2rem;
+    padding: 0.9rem 0.9rem 1.2rem;
     overflow-y: auto;
     font-size: 0.85rem;
   }
@@ -103,6 +103,44 @@
     &--drag {
       opacity: 0.4;
     }
+  }
+
+  .slides-add {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    margin-top: 0.15rem;
+    padding: 0.7rem;
+    border: 1.5px dashed var(--color-gray-30, #ced4da);
+    border-radius: var(--border-radius-md);
+    background: none;
+    color: var(--color-gray-60, var(--text-primary-color));
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+
+    &:hover,
+    &:focus-visible {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background: var(--color-primary-light, var(--color-surface-high));
+    }
+  }
+
+  .slides-add__plus {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1;
   }
 
   .slides-card__open {
@@ -451,146 +489,6 @@ body.slides-presenting {
     &:hover {
       background: var(--color-surface-high);
     }
-  }
-}
-
-// the slide sorter (slideSorter.tsx)
-.excalidraw .slide-sorter {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  background: var(--island-bg-color);
-  color: var(--text-primary-color);
-  pointer-events: all;
-  outline: none;
-
-  &__bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--default-border-color);
-    font-size: 0.9rem;
-  }
-
-  &__hint {
-    color: var(--color-gray-50);
-    font-size: 0.8rem;
-  }
-
-  &__spacer {
-    flex: 1;
-  }
-
-  &__empty {
-    margin: 3rem auto;
-    color: var(--color-gray-50);
-  }
-
-  &__grid {
-    flex: 1;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-    align-content: start;
-    gap: 1.25rem;
-    margin: 0;
-    padding: 1.25rem;
-    overflow: auto;
-    list-style: none;
-  }
-
-  &__card {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.4rem;
-    border: 2px solid transparent;
-    border-radius: var(--border-radius-lg);
-    cursor: grab;
-    user-select: none;
-
-    &:hover {
-      background: var(--color-surface-low, var(--color-surface-high));
-    }
-
-    &--selected {
-      border-color: var(--color-primary);
-      background: var(--color-primary-light, var(--color-surface-high));
-    }
-
-    &--skip .slide-sorter__thumb {
-      opacity: 0.45;
-    }
-
-    &--dragging {
-      opacity: 0.35;
-    }
-
-    &--drop-before::before,
-    &--drop-after::after {
-      content: "";
-      position: absolute;
-      top: 0.4rem;
-      bottom: 0.4rem;
-      width: 4px;
-      border-radius: 2px;
-      background: var(--color-primary);
-    }
-
-    &--drop-before::before {
-      left: -0.8rem;
-    }
-
-    &--drop-after::after {
-      right: -0.8rem;
-    }
-  }
-
-  &__thumb {
-    aspect-ratio: 16 / 9;
-    overflow: hidden;
-    border: 1px solid var(--default-border-color);
-    border-radius: 6px;
-    background: #fff;
-
-    img {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-  }
-
-  &__meta {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    min-width: 0;
-    font-size: 0.8rem;
-  }
-
-  &__num {
-    color: var(--color-gray-50);
-    font-variant-numeric: tabular-nums;
-  }
-
-  &__title {
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  &__badge {
-    margin-left: auto;
-    padding: 0 0.35rem;
-    border-radius: 4px;
-    background: var(--color-surface-high);
-    color: var(--color-gray-50);
-    font-size: 0.7rem;
   }
 }
 

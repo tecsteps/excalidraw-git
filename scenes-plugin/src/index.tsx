@@ -20,11 +20,10 @@ import { IDLE_PUSH_MS, scenesController } from "./controller";
 import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
-import { PresentationOverlay } from "./present";
+import { PresentationOverlay, presenter } from "./present";
 import { loadFontLibrary } from "./fonts";
 import { AddFontOverlay } from "./fontsUI";
 import { PublicSceneOverlay } from "./publicScene";
-import { SlideSorterOverlay } from "./slideSorter";
 import { SLIDES_SIDEBAR_NAME, SlidesSidebar } from "./slidesUI";
 import { connection, otherSpacesScenes } from "./online/github";
 import type { SpaceScenes } from "./online/github";
@@ -353,11 +352,25 @@ export const ScenesTopLeftUI = ({ isMobile }: { isMobile: boolean }) => {
 /** Slides and MCP, at the top right (next to the sidebar button) */
 const ScenesTopRightUI = ({ isMobile }: { isMobile: boolean }) => {
   const api = useExcalidrawAPI();
+  const { slides } = useSyncExternalStore(deck.subscribe, deck.getState);
   if (isMobile) {
     return null;
   }
   return (
     <div className="scenes-top-right">
+      {slides.some((slide) => !slide.skip) && (
+        <button
+          type="button"
+          className="scenes-pill scenes-pill--primary"
+          title="Present this scene from the first slide (Esc ends)"
+          onClick={() => presenter.start()}
+        >
+          <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden>
+            <path d="M5 3.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8A.8.8 0 0 0 5 3.2z" fill="currentColor" />
+          </svg>
+          Present
+        </button>
+      )}
       <button
         type="button"
         className="scenes-pill scenes-slides-btn"
@@ -1260,7 +1273,6 @@ export const ScenesSidebar = () => {
     </Sidebar>
     <SlidesSidebar />
     <PresentationOverlay />
-    <SlideSorterOverlay />
     <PublicSceneOverlay />
     <AddFontOverlay />
     {IS_ONLINE && <RepoSetupDialog />}

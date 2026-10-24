@@ -6,6 +6,7 @@ import { MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import { GithubIcon, ExternalLinkIcon } from "@excalidraw/excalidraw/components/icons";
 import clsx from "clsx";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 
 import { scenesController } from "../controller";
 
@@ -563,7 +564,19 @@ const shareLink = (owner: string, name: string, { present = false } = {}) =>
   `${window.location.origin}/@${encodeURIComponent(owner)}/${encodeURIComponent(name)}${present ? "?present" : ""}`;
 
 /** a link button that copies and says so */
-const CopyLink = ({ link, label, title, className = "scenes-link" }: { link: string; label: string; title: string; className?: string }) => {
+const CopyLink = ({
+  link,
+  label,
+  title,
+  icon,
+  className = "scenes-link",
+}: {
+  link: string;
+  label: string;
+  title: string;
+  icon?: ReactNode;
+  className?: string;
+}) => {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -577,6 +590,7 @@ const CopyLink = ({ link, label, title, className = "scenes-link" }: { link: str
         })
       }
     >
+      {icon}
       {copied ? "Copied ✓" : label}
     </button>
   );
@@ -599,6 +613,17 @@ export const PresentationLink = () => {
       className="slides-btn"
       link={shareLink(repo.owner, item.name, { present: true })}
       label="Share"
+      icon={
+        <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
+          <path
+            d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9m1.3 3.9a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+        </svg>
+      }
       title={`opens presenting; ${whoCanView(item, repo)}`}
     />
   );

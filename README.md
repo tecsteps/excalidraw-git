@@ -273,15 +273,13 @@ pill) opens the deck:
   the next click step), ← back, Home / End, a number + Enter jumps, G all
   slides, L laser pointer, B black screen, Esc ends. **Presenter** opens a
   second window with the current and next slide, speaker notes and a timer.
-- **+ Slide** adds a 16:9 frame (1920 × 1080) after the selected one; drag
-  slides in the list to reorder; hover a slide to duplicate (⧉) or delete
-  (×) it.
-- **Sort** shows all slides as a grid: drag one or several slides to any
-  position, duplicate (⌘D) or delete (⌫) them anywhere in the deck.
-  Click / ⇧-click / ⌘-click select, ⌘A all, ⌥← / ⌥→ move the selection,
-  ↵ or double-click opens a slide, Esc closes. A duplicate keeps the
-  slide's content, click steps and notes and goes right after its original;
-  everything can be undone with ⌘Z. Per slide: title, speaker notes, "skip when
+- **Add slide** (at the end of the list) adds a 16:9 frame (1920 × 1080)
+  after the selected one. Drag slides in the list (or press ↑ / ↓ on one)
+  to reorder; hover a slide to duplicate (⧉) or delete (×) it. On the
+  canvas the slides always lie in deck order, seven per row: the canvas
+  follows every change in the list. A duplicate keeps the slide's content,
+  click steps and notes and goes right after its original; everything can
+  be undone with ⌘Z. Per slide: title, speaker notes, "skip when
   presenting" (backup slides), "show template".
 - **Click steps:** select elements on a slide and pick "Click 1", "Click 2" …
   under "Selection appears"; they fade in one click at a time.

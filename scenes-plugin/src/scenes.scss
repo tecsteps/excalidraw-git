@@ -240,6 +240,15 @@
     &--mobile {
       max-width: 9rem;
     }
+
+    &--primary {
+      background: var(--color-primary);
+      color: var(--color-surface-lowest, #fff);
+
+      &:hover {
+        background: var(--color-primary-darker);
+      }
+    }
   }
 
   .scenes-pill__icon svg {

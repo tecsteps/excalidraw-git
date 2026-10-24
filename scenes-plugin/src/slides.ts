@@ -82,6 +82,8 @@ export type Frame = NonDeleted<ExcalidrawFrameElement>;
 export const SLIDE_WIDTH = 1920;
 export const SLIDE_HEIGHT = 1080;
 const SLIDE_GAP = 240;
+/** slides per row on the canvas */
+const SLIDE_COLUMNS = 7;
 
 export const slideData = (el: ExcalidrawElement | null | undefined): SlideData =>
   ((el?.customData as any)?.slides as SlideData) || {};
@@ -592,9 +594,36 @@ export const patchSlideData = (
   );
 };
 
-/** reorder: `ids` is the full new order */
+/**
+ * The slides in deck order as a grid on the canvas, SLIDE_COLUMNS per row,
+ * starting at the top-left of where they are now (or at `at`). Each
+ * slide moves with everything on it.
+ */
+const layOut = (elements: readonly ExcalidrawElement[], at?: { x: number; y: number } | null) => {
+  const slides = getSlides(elements);
+  if (!slides.length) {
+    return [...elements];
+  }
+  const start = at ?? origin(slides)!;
+  const cellWidth = Math.max(...slides.map((s) => s.width)) + SLIDE_GAP;
+  const cellHeight = Math.max(...slides.map((s) => s.height)) + SLIDE_GAP;
+  const shift = new Map<string, { dx: number; dy: number }>();
+  slides.forEach((slide, index) => {
+    const dx = start.x + (index % SLIDE_COLUMNS) * cellWidth - slide.x;
+    const dy = start.y + Math.floor(index / SLIDE_COLUMNS) * cellHeight - slide.y;
+    if (dx || dy) {
+      shift.set(slide.id, { dx, dy });
+    }
+  });
+  return elements.map((el) => {
+    const by = shift.get(el.id) ?? (el.frameId && !el.isDeleted ? shift.get(el.frameId) : undefined);
+    return by ? newElementWith(el as any, { x: el.x + by.dx, y: el.y + by.dy } as any) : el;
+  });
+};
+
+/** reorder: `ids` is the full new order; the canvas follows */
 export const setSlideOrder = (api: ExcalidrawImperativeAPI, ids: string[]) =>
-  patchSlideData(api, new Map(ids.map((id, order) => [id, { order }])));
+  update(api, layOut(withOrder(api.getSceneElementsIncludingDeleted(), ids)));
 
 const newFrame = (props: { x: number; y: number; width: number; height: number; name: string }) =>
   ({
@@ -624,15 +653,9 @@ const newFrame = (props: { x: number; y: number; width: number; height: number; 
     customData: {},
   }) as any;
 
-/** the next spot to the right of `anchor` (same row) where a slide of this size overlaps no frame */
-const freeSpot = (elements: readonly ExcalidrawElement[], anchor: Frame | undefined, width: number, height: number) => {
-  let x = anchor ? anchor.x + anchor.width + SLIDE_GAP : 0;
-  const y = anchor ? anchor.y : 0;
-  while (elements.some((el) => isFrame(el) && el.x < x + width && el.x + el.width > x && el.y < y + height && el.y + el.height > y)) {
-    x += width + SLIDE_GAP;
-  }
-  return { x, y };
-};
+/** the top-left corner of the slides' grid (null: no slides yet) */
+const origin = (slides: Frame[]) =>
+  slides.length ? { x: Math.min(...slides.map((s) => s.x)), y: Math.min(...slides.map((s) => s.y)) } : null;
 
 /** the elements with `order` set to their position in `ids` */
 const withOrder = (elements: readonly ExcalidrawElement[], ids: string[]) =>
@@ -671,8 +694,8 @@ export const duplicateSlides = (api: ExcalidrawImperativeAPI, ids: string[]) => 
       elements: [frame, ...own],
       randomizeSeed: true,
     });
-    const spot = freeSpot(elements, frame, frame.width, frame.height);
-    const [dx, dy] = [spot.x - frame.x, spot.y - frame.y];
+    // next to the original for now: the layout below puts it in its place
+    const [dx, dy] = [frame.width + SLIDE_GAP, 0];
     const copyId = origIdToDuplicateId.get(id)!;
     const copies = duplicatedElements.map((el) => {
       const moved = newElementWith(el as any, { x: el.x + dx, y: el.y + dy } as any) as ExcalidrawElement;
@@ -684,7 +707,7 @@ export const duplicateSlides = (api: ExcalidrawImperativeAPI, ids: string[]) => 
     order.splice(order.indexOf(id) + 1, 0, copyId);
     created.push(copyId);
   }
-  elements = withOrder(elements, order);
+  elements = layOut(withOrder(elements, order));
   syncInvalidIndices(elements as any);
   update(api, elements as any);
   return created;
@@ -697,13 +720,16 @@ export const deleteSlides = (api: ExcalidrawImperativeAPI, ids: string[]) => {
   const remaining = getSlides(elements).map((s) => s.id).filter((id) => !gone.has(id));
   update(
     api,
-    withOrder(
-      elements.map((el) =>
-        !el.isDeleted && (gone.has(el.id) || (el.frameId && gone.has(el.frameId)))
-          ? newElementWith(el as any, { isDeleted: true } as any)
-          : el,
+    layOut(
+      withOrder(
+        elements.map((el) =>
+          !el.isDeleted && (gone.has(el.id) || (el.frameId && gone.has(el.frameId)))
+            ? newElementWith(el as any, { isDeleted: true } as any)
+            : el,
+        ),
+        remaining,
       ),
-      remaining,
+      origin(getSlides(elements)),
     ),
   );
 };
@@ -716,22 +742,15 @@ export const addSlide = (api: ExcalidrawImperativeAPI, after?: string) => {
   const template = getTemplate(elements);
   const width = template?.width ?? SLIDE_WIDTH;
   const height = template?.height ?? SLIDE_HEIGHT;
-  // the next free spot to the right of the anchor; the first slide goes
-  // next to what is already drawn (not on top of it)
+  // the first slide goes next to what is already drawn (not on top of it);
+  // the others take their place in the grid (see layOut)
   const drawn = elements.filter((el) => !el.isDeleted);
   const [, minY, maxX] = drawn.length ? getCommonBounds(drawn) : [0, 0, -SLIDE_GAP * 2];
-  let x = anchor ? anchor.x + anchor.width + SLIDE_GAP : Math.round(maxX + SLIDE_GAP * 2);
-  const y = anchor ? anchor.y : Math.round(minY);
-  while (elements.some((el) => isFrame(el) && el.x < x + width && el.x + el.width > x && el.y < y + height && el.y + el.height > y)) {
-    x += width + SLIDE_GAP;
-  }
+  const start = origin(slides) ?? { x: Math.round(maxX + SLIDE_GAP * 2), y: Math.round(minY) };
   const position = anchor ? slides.indexOf(anchor) + 1 : 0;
-  const frame = withSlideData(newFrame({ x, y, width, height, name: `Slide ${slides.length + 1}` }), {});
+  const frame = withSlideData(newFrame({ ...start, width, height, name: `Slide ${slides.length + 1}` }), {});
   const ordered = [...slides.slice(0, position).map((s) => s.id), frame.id, ...slides.slice(position).map((s) => s.id)];
-  const next = [...elements, frame].map((el) => {
-    const order = ordered.indexOf(el.id);
-    return order >= 0 ? withSlideData(el, { order }) : el;
-  });
+  const next = layOut(withOrder([...elements, frame], ordered), start);
   syncInvalidIndices(next as any);
   update(api, next);
   return frame.id as string;
