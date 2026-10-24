@@ -39,6 +39,12 @@
       cursor: default;
     }
 
+    &[aria-pressed="true"] {
+      border-color: var(--color-primary);
+      background: var(--color-primary-light, var(--color-surface-high));
+      color: var(--color-primary-darkest, var(--color-primary));
+    }
+
     &--danger:not(:disabled) {
       color: var(--color-danger, #e03131);
     }
@@ -111,8 +117,8 @@
     justify-content: center;
     gap: 0.5rem;
     width: 100%;
-    margin-top: 0.15rem;
-    padding: 0.7rem;
+    margin-bottom: 0.15rem;
+    padding: 0.55rem;
     border: 1.5px dashed var(--color-gray-30, #ced4da);
     border-radius: var(--border-radius-md);
     background: none;

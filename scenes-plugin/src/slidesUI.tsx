@@ -236,6 +236,22 @@ const SlideList = () => {
 
   return (
     <ol className="slides-list">
+      <li>
+        <button
+          type="button"
+          className="slides-add"
+          title="Add a slide after the selected one (or at the end)"
+          onClick={() => {
+            const id = addSlide(api(), activeId ?? undefined);
+            setTimeout(() => focusFrame(id), 50);
+          }}
+        >
+          <span className="slides-add__plus" aria-hidden="true">
+            +
+          </span>
+          Add slide
+        </button>
+      </li>
       {slides.map((slide) => (
         <li
           key={slide.id}
@@ -318,22 +334,6 @@ const SlideList = () => {
           </button>
         </li>
       ))}
-      <li>
-        <button
-          type="button"
-          className="slides-add"
-          title="Add a slide after the selected one (or at the end)"
-          onClick={() => {
-            const id = addSlide(api(), activeId ?? undefined);
-            setTimeout(() => focusFrame(id), 50);
-          }}
-        >
-          <span className="slides-add__plus" aria-hidden="true">
-            +
-          </span>
-          Add slide
-        </button>
-      </li>
     </ol>
   );
 };
@@ -520,8 +520,8 @@ const ThemeForm = () => {
         </button>
       </div>
       <p className="slides-hint">
-        Template text can use <code>{"{page}"}</code> <code>{"{total}"}</code> <code>{"{title}"}</code> <code>{"{deck}"}</code>{" "}
-        <code>{"{date}"}</code>. Template elements are locked on slides; unlock one to change it on that slide only.
+        Placeholders: <code>{"{page}"}</code> <code>{"{total}"}</code> <code>{"{title}"}</code> <code>{"{deck}"}</code>{" "}
+        <code>{"{date}"}</code>
       </p>
       <label className="slides-field">
         <span>Font</span>
@@ -555,7 +555,6 @@ const ThemeForm = () => {
           {select("transition", [["Glide", "glide"], ["Cut", "cut"]])}
         </label>
       </div>
-      <p className="slides-hint">New elements use this style. Elements that still have the deck's values follow changes; what you styled by hand stays.</p>
     </section>
   );
 };
@@ -595,7 +594,9 @@ const SlidesEmpty = () => (
 
 export const SlidesSidebar = () => {
   const { slides, activeId } = useDeck();
-  const [pdfOpen, setPdfOpen] = useState(false);
+  /** the panel under the buttons: PDF export or the deck's template and style */
+  const [panel, setPanel] = useState<"pdf" | "style" | null>(null);
+  const toggle = (which: "pdf" | "style") => setPanel(panel === which ? null : which);
   const active = slides.find((s) => s.id === activeId) ? activeId : null;
   return (
     <Sidebar name={SLIDES_SIDEBAR_NAME} className="slides-sidebar">
@@ -625,8 +626,8 @@ export const SlidesSidebar = () => {
                 type="button"
                 className="slides-btn"
                 disabled={!slides.length}
-                aria-pressed={pdfOpen}
-                onClick={() => setPdfOpen(!pdfOpen)}
+                aria-pressed={panel === "pdf"}
+                onClick={() => toggle("pdf")}
               >
                 <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
                   <path
@@ -640,15 +641,36 @@ export const SlidesSidebar = () => {
                 </svg>
                 PDF
               </button>
+              <button
+                type="button"
+                className="slides-btn"
+                aria-pressed={panel === "style"}
+                onClick={() => toggle("style")}
+                title="Template (header, footer, logo) and the deck's fonts and colors"
+              >
+                <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
+                  <path
+                    d="M10 2.8a7.2 7.2 0 0 0 0 14.4c1 0 1.6-.7 1.6-1.5 0-.9-.7-1.2-.7-2 0-.8.6-1.3 1.4-1.3h1.6a3.3 3.3 0 0 0 3.3-3.3c0-3.5-3.2-6.3-7.2-6.3z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="6.4" cy="9.6" r="1.1" fill="currentColor" />
+                  <circle cx="8.9" cy="6.3" r="1.1" fill="currentColor" />
+                  <circle cx="12.7" cy="6.8" r="1.1" fill="currentColor" />
+                </svg>
+                Style
+              </button>
             </div>
-            {pdfOpen && <PdfPanel onClose={() => setPdfOpen(false)} />}
+            {panel === "pdf" && <PdfPanel onClose={() => setPanel(null)} />}
+            {panel === "style" && <ThemeForm />}
             <SlideList />
             <p className="slides-hint">
               Drag to reorder.
             </p>
             <StepPicker />
             {active && <SlideDetails id={active} />}
-            <ThemeForm />
           </>
         )}
       </div>
