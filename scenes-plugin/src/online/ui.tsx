@@ -9,6 +9,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 
 import { scenesController } from "../controller";
+import { PlaceSvg } from "../icons";
 import { QuickTip } from "../quickTip";
 
 import { SPACE_KEY, currentSpace, spaceSuffix } from "../storage";
@@ -656,13 +657,29 @@ export const SlidesShare = () => {
   const name = item?.name ?? null;
   return (
     <section className="slides-details">
-      <p className="slides-hint">
-        {!shareable
-          ? shareTip(item, repo, "presentation")
-          : item!.public
-          ? "Public: anyone with the link can watch it, no sign-in needed."
-          : `Private: only people who can read ${repo!.owner}/${repo!.name} on GitHub can open the link, after signing in with GitHub.`}
-      </p>
+      {shareable ? (
+        <>
+          <span className={clsx("slides-badge", item!.public ? "slides-badge--public" : "slides-badge--private")}>
+            <PlaceSvg kind={item!.public ? "public" : "private"} />
+            {item!.public ? "Public" : "Private"}
+          </span>
+          <p className="slides-hint">
+            {item!.public ? (
+              "Anyone with the link can watch it, no sign-in needed."
+            ) : (
+              <>
+                Only people who can read{" "}
+                <a href={repoUrl(repo!)} target="_blank" rel="noopener noreferrer">
+                  {repo!.owner}/{repo!.name}
+                </a>{" "}
+                on GitHub can open the link, after signing in with GitHub.
+              </>
+            )}
+          </p>
+        </>
+      ) : (
+        <p className="slides-hint">{shareTip(item, repo, "presentation")}</p>
+      )}
       <div className="slides-row">
         <CopyLink
           className="slides-btn slides-btn--primary"

@@ -223,6 +223,31 @@
     border-top: 1px solid var(--default-border-color);
   }
 
+  .slides-badge {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+
+    &--private {
+      background: var(--color-surface-high, #f1f0ff);
+      color: var(--color-gray-80, var(--text-primary-color));
+    }
+
+    &--public {
+      background: #e6f6ec;
+      color: #1b7a3d;
+    }
+  }
+
+  .slides-hint a {
+    color: var(--color-primary);
+  }
+
   // the first section of a tab: right under the tabs, no rule above it
   .slides-tabs + .slides-details {
     padding-top: 0;
