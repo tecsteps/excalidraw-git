@@ -159,7 +159,7 @@
     list-style: none;
   }
 
-  .slides-card__open--template {
+  .slides-card__open.slides-card__open--template {
     grid-template-columns: 6.5rem 1fr;
     cursor: pointer;
   }
