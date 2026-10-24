@@ -75,7 +75,26 @@ export type SlideData = {
   step?: number;
   /** slides: template elements the user removed from this slide (kept in the file, unlike deleted copies) */
   hidden?: string[];
+  /** slides: the template (frame id) this slide uses; none: the first template */
+  layout?: string;
+  /** slides: the template version this slide shows (none: the current one); templates: the current version */
+  rev?: number;
+  /** slides: the title last taken from the headline placeholder (the slide's name follows it while they match) */
+  autoName?: string;
+  /** template texts: typed on each slide ("title" also names the slide) instead of the same everywhere */
+  placeholder?: "title" | "text";
+  /** placeholder copies: which kind of placeholder they copy */
+  ph?: "title" | "text";
+  /** placeholder copies: not typed yet (faded on the canvas, hidden when presenting) */
+  empty?: boolean;
+  /** templates: what the slides show (the template as it was when its changes were last applied) */
+  snap?: TemplateSnapshot;
+  /** templates: older versions that some slides still show ("only new slides") */
+  old?: Record<string, TemplateSnapshot>;
 };
+
+/** a template's elements, x / y relative to its frame */
+export type TemplateSnapshot = { width: number; height: number; elements: ExcalidrawElement[] };
 
 export type Frame = NonDeleted<ExcalidrawFrameElement>;
 
@@ -100,8 +119,19 @@ export const withSlideData = <T extends ExcalidrawElement>(el: T, patch: Partial
 
 const isFrame = (el: ExcalidrawElement): el is Frame => el.type === "frame" && !el.isDeleted;
 
-export const getTemplate = (elements: readonly ExcalidrawElement[]) =>
-  (elements.find((el) => isFrame(el) && slideData(el).role === "template") as Frame | undefined) ?? null;
+/** the deck's templates: the first one is the default (and holds the deck's theme) */
+export const getTemplates = (elements: readonly ExcalidrawElement[]): Frame[] =>
+  elements
+    .filter((el): el is Frame => isFrame(el) && slideData(el).role === "template")
+    .sort((a, b) => (slideData(a).order ?? 0) - (slideData(b).order ?? 0) || a.y - b.y || a.x - b.x);
+
+export const getTemplate = (elements: readonly ExcalidrawElement[]) => getTemplates(elements)[0] ?? null;
+
+/** the template a slide uses (null: none) */
+export const templateOf = (slide: Frame, templates: readonly Frame[]) =>
+  slideData(slide).template === false
+    ? null
+    : templates.find((t) => t.id === slideData(slide).layout) ?? templates[0] ?? null;
 
 export const getTheme = (elements: readonly ExcalidrawElement[]): DeckTheme => ({
   ...DEFAULT_THEME,
@@ -149,7 +179,7 @@ export const placeOnSlides = <T extends Record<string, any> | null | undefined>(
     const { slide, ...rest } = el as Record<string, any>;
     const frame =
       slide === "template"
-        ? frames.find((f) => f.customData?.slides?.role === "template")
+        ? getTemplates(frames as any)[0]
         : typeof slide === "number" || /^\d+$/.test(String(slide))
         ? slides[Number(slide) - 1]
         : frames.find((f) => f.id === slide);
@@ -200,39 +230,50 @@ const canon = (value: unknown): string => {
 
 /**
  * What the user can change on a copy (geometry Excalidraw recomputes, such
- * as text widths after a font loads, is left out)
+ * as text widths after a font loads, is left out). Placeholder copies: only
+ * where and how the text sits (the text is the slide's own); a text that
+ * grows while typed keeps its anchor (left / center / right edge).
  */
 const signature = (el: ExcalidrawElement) => {
   const any = el as any;
   const isText = el.type === "text";
-  return hashString(
-    canon({
-      type: el.type,
-      x: any.containerId ? 0 : el.x,
-      y: any.containerId ? 0 : el.y,
-      width: isText ? 0 : el.width,
-      height: isText ? 0 : el.height,
-      angle: el.angle,
-      strokeColor: el.strokeColor,
-      backgroundColor: el.backgroundColor,
-      fillStyle: el.fillStyle,
-      strokeWidth: el.strokeWidth,
-      strokeStyle: el.strokeStyle,
-      roughness: el.roughness,
-      opacity: el.opacity,
-      roundness: el.roundness,
-      locked: el.locked,
-      link: el.link,
-      text: any.originalText ?? null,
-      fontFamily: any.fontFamily ?? null,
-      fontSize: any.fontSize ?? null,
-      textAlign: any.textAlign ?? null,
-      points: any.points ?? null,
-      fileId: any.fileId ?? null,
-      startArrowhead: any.startArrowhead ?? null,
-      endArrowhead: any.endArrowhead ?? null,
-    }),
-  );
+  const data = slideData(el);
+  const typed = !!data.ph;
+  const anchor = !isText ? 0 : any.textAlign === "center" ? el.width / 2 : any.textAlign === "right" ? el.width : 0;
+  const fields: Record<string, unknown> = {
+    type: el.type,
+    x: any.containerId ? 0 : typed ? el.x + anchor : el.x,
+    y: any.containerId ? 0 : el.y,
+    width: isText ? 0 : el.width,
+    height: isText ? 0 : el.height,
+    angle: el.angle,
+    strokeColor: el.strokeColor,
+    backgroundColor: el.backgroundColor,
+    fillStyle: el.fillStyle,
+    strokeWidth: el.strokeWidth,
+    strokeStyle: el.strokeStyle,
+    roughness: el.roughness,
+    opacity: typed ? 0 : el.opacity,
+    roundness: el.roundness,
+    locked: el.locked,
+    link: el.link,
+    text: typed ? null : any.originalText ?? null,
+    fontFamily: any.fontFamily ?? null,
+    fontSize: any.fontSize ?? null,
+    textAlign: any.textAlign ?? null,
+    points: any.points ?? null,
+    fileId: any.fileId ?? null,
+    startArrowhead: any.startArrowhead ?? null,
+    endArrowhead: any.endArrowhead ?? null,
+  };
+  // only when set: signatures saved before placeholders existed stay valid
+  if (data.placeholder) {
+    fields.placeholder = data.placeholder;
+  }
+  if (typed) {
+    fields.typed = true;
+  }
+  return hashString(canon(fields));
 };
 
 const fillPlaceholders = (text: string, vars: Record<string, string>) =>
@@ -240,10 +281,10 @@ const fillPlaceholders = (text: string, vars: Record<string, string>) =>
 
 const copyId = (id: string, slideId: string) => `${id}~${slideId}`;
 
-/** the copy of template element `src` on `slide` */
+/** the copy of template element `src` on `slide` (`template`: where src's x / y count from) */
 const makeCopy = (
   src: ExcalidrawElement,
-  template: Frame,
+  template: { x: number; y: number; width: number; height: number },
   slide: Frame,
   templateIds: Set<string>,
   vars: Record<string, string>,
@@ -303,30 +344,149 @@ const measureTexts = (copies: any[]) =>
     return { ...el, text: next.text, width: next.width, height: next.height, x };
   });
 
+/** an unfilled placeholder: shown faded while editing, never to the audience */
+export const isEmptyPlaceholder = (el: ExcalidrawElement) => !!slideData(el).copyOf && !!slideData(el).empty;
+
+/** what the audience sees of these elements (unfilled placeholders left out) */
+export const forAudience = <T extends ExcalidrawElement>(elements: readonly T[]) => elements.filter((el) => !isEmptyPlaceholder(el));
+
+/** faded: an unfilled placeholder on a slide */
+const EMPTY_OPACITY = 0.35;
+
+// -----------------------------------------------------------------------------
+// template versions: slides show a template's applied version (its snapshot);
+// changes to the template wait until the user applies them, to all slides or
+// only to new ones
+// -----------------------------------------------------------------------------
+
+/** the template as it is on the canvas now */
+export const liveSnapshot = (elements: readonly ExcalidrawElement[], template: Frame): TemplateSnapshot => ({
+  width: template.width,
+  height: template.height,
+  elements: elements
+    .filter((el) => !el.isDeleted && el.frameId === template.id)
+    .map((el) => ({ ...el, x: el.x - template.x, y: el.y - template.y }) as ExcalidrawElement),
+});
+
+const snapshotKey = (snap: TemplateSnapshot) =>
+  hashString(canon([Math.round(snap.width), Math.round(snap.height), ...snap.elements.map((el) => [el.id, signature(el)])]));
+
+/** templates changed since their changes were last applied */
+export const pendingTemplates = (elements: readonly ExcalidrawElement[]) =>
+  getTemplates(elements).filter((t) => {
+    const snap = slideData(t).snap;
+    return !!snap && snapshotKey(snap) !== snapshotKey(liveSnapshot(elements, t));
+  });
+
+/** the slides that use a template */
+export const slidesOfTemplate = (elements: readonly ExcalidrawElement[], templateId: string) => {
+  const templates = getTemplates(elements);
+  return getSlides(elements).filter((slide) => templateOf(slide, templates)?.id === templateId);
+};
+
+/**
+ * Apply a template's changes: `all` brings every slide that uses it to the
+ * template as it is now; otherwise its slides keep what they show, and only
+ * new slides get the new version. Templates without a snapshot yet (new, or
+ * from before versions) get one.
+ */
+export const applyTemplateChanges = (
+  elements: readonly ExcalidrawElement[],
+  templateId: string,
+  { all }: { all: boolean },
+): ExcalidrawElement[] => {
+  const template = getTemplates(elements).find((t) => t.id === templateId);
+  if (!template) {
+    return [...elements];
+  }
+  const data = slideData(template);
+  const live = liveSnapshot(elements, template);
+  const current = data.rev ?? 0;
+  const slides = slidesOfTemplate(elements, templateId);
+  const patches = new Map<string, Partial<SlideData>>();
+  if (all || !data.snap) {
+    for (const slide of slides) {
+      if (slideData(slide).rev !== undefined) {
+        patches.set(slide.id, { rev: undefined });
+      }
+    }
+    patches.set(template.id, { snap: live, rev: data.snap ? current + 1 : current, old: undefined });
+  } else {
+    for (const slide of slides) {
+      if (slideData(slide).rev === undefined) {
+        patches.set(slide.id, { rev: current });
+      }
+    }
+    const used = new Set(slides.map((slide) => slideData(slide).rev ?? current));
+    const old: Record<string, TemplateSnapshot> = {};
+    const versions: Record<string, TemplateSnapshot> = { ...(data.old || {}), [current]: data.snap };
+    for (const [rev, snap] of Object.entries(versions)) {
+      if (used.has(Number(rev))) {
+        old[rev] = snap;
+      }
+    }
+    patches.set(template.id, { snap: live, rev: current + 1, old: Object.keys(old).length ? old : undefined });
+  }
+  return elements.map((el) => (patches.has(el.id) ? withSlideData(el, patches.get(el.id)!) : el));
+};
+
+/** templates without a snapshot (new, or from before versions) get one */
+const withSnapshots = (elements: readonly ExcalidrawElement[]) => {
+  let next: readonly ExcalidrawElement[] = elements;
+  for (const template of getTemplates(elements)) {
+    if (!slideData(template).snap) {
+      next = applyTemplateChanges(next, template.id, { all: true });
+    }
+  }
+  return next;
+};
+
+/** what a slide shows of its template: the version it is on */
+const snapshotFor = (slide: Frame, template: Frame, elements: readonly ExcalidrawElement[]) => {
+  const data = slideData(template);
+  const rev = slideData(slide).rev;
+  const snap = rev === undefined || rev === (data.rev ?? 0) ? data.snap : data.old?.[rev] ?? data.snap;
+  return snap ?? liveSnapshot(elements, template);
+};
+
 export type SyncResult = { elements: ExcalidrawElement[]; changed: number } | null;
 
 /**
- * Bring every slide's template copies up to date. Returns null when nothing
- * changes. `reset`: slide ids whose overridden / hidden copies come back too.
+ * Bring every slide's template copies up to date with the template version
+ * it shows. Returns null when nothing changes. `reset`: slide ids whose
+ * overridden / hidden copies come back too. `applyPending`: template changes
+ * go to all slides right away (agents: they don't get asked).
  */
 export const syncTemplate = (
-  elements: readonly ExcalidrawElement[],
+  input: readonly ExcalidrawElement[],
   deck: string,
-  { reset = new Set<string>() }: { reset?: Set<string> } = {},
+  { reset = new Set<string>(), applyPending = false }: { reset?: Set<string>; applyPending?: boolean } = {},
 ): SyncResult => {
-  const template = getTemplate(elements);
+  let elements = withSnapshots(input);
+  if (applyPending) {
+    for (const template of pendingTemplates(elements)) {
+      elements = applyTemplateChanges(elements, template.id, { all: true });
+    }
+  }
+  const templates = getTemplates(elements);
   const slides = getSlides(elements);
-  const sources = template
-    ? elements.filter((el) => !el.isDeleted && el.frameId === template.id)
-    : [];
-  const templateIds = new Set(sources.map((el) => el.id));
   const byId = new Map(elements.map((el) => [el.id, el]));
   const replaced = new Map<string, ExcalidrawElement>();
   const added: ExcalidrawElement[] = [];
   const date = new Date().toLocaleDateString();
+  // the frames' own data changes (templates got snapshots) count as changes too
+  elements.forEach((el, i) => {
+    if (el !== input[i]) {
+      replaced.set(el.id, el);
+    }
+  });
 
   slides.forEach((slide, index) => {
-    const wanted = slideData(slide).template !== false && !!template;
+    const template = templateOf(slide, templates);
+    const snap = template ? snapshotFor(slide, template, elements) : null;
+    const sources = snap?.elements ?? [];
+    const templateIds = new Set(sources.map((el) => el.id));
+    const origin = { x: 0, y: 0, width: snap?.width ?? slide.width, height: snap?.height ?? slide.height };
     const vars = {
       page: String(index + 1),
       total: String(slides.length),
@@ -334,15 +494,41 @@ export const syncTemplate = (
       deck,
       date,
     };
-    const fresh = wanted ? measureTexts(sources.map((src) => makeCopy(src, template!, slide, templateIds, vars))) : [];
+    const fresh = measureTexts(
+      sources.map((src) => {
+        const copy: any = makeCopy(src, origin, slide, templateIds, vars);
+        const kind = slideData(src).placeholder;
+        if (!kind || src.type !== "text") {
+          return copy;
+        }
+        // a placeholder: the slide's own text once typed, the template's sample until then
+        // (switched to another template: the text typed into the same kind of placeholder comes along)
+        const existing =
+          (byId.get(copy.id) as any) ??
+          elements.find((el) => !el.isDeleted && el.frameId === slide.id && slideData(el).ph === kind && !slideData(el).empty && !templateIds.has(slideData(el).copyOf!));
+        const own = existing && !existing.isDeleted ? existing.originalText ?? existing.text : null;
+        const typed = own !== null && own !== copy.originalText;
+        return {
+          ...copy,
+          locked: false,
+          ...(typed ? { text: own, originalText: own } : { opacity: Math.round(src.opacity * EMPTY_OPACITY) }),
+          customData: { ...copy.customData, slides: { ...copy.customData.slides, empty: !typed, ph: kind } },
+        };
+      }),
+    );
     const freshIds = new Set(fresh.map((el) => el.id));
     const wasHidden = slideData(slide).hidden || [];
     const hidden = new Set(reset.has(slide.id) ? [] : wasHidden);
+    let headline: string | null = null;
     for (const copy of fresh) {
       const sig = signature(copy as ExcalidrawElement);
       const existing = byId.get(copy.id) as any;
-      const srcId = slideData(copy).copyOf!;
-      const withSig = { ...copy, customData: { ...copy.customData, slides: { copyOf: srcId, sig } } };
+      const freshData = slideData(copy);
+      const srcId = freshData.copyOf!;
+      const withSig = { ...copy, customData: { ...copy.customData, slides: { ...freshData, sig } } };
+      if (freshData.ph === "title" && !freshData.empty) {
+        headline = String(copy.originalText ?? copy.text).split("\n")[0].trim().slice(0, 80) || null;
+      }
       if (existing && !existing.isDeleted) {
         hidden.delete(srcId); // back on the slide (e.g. undo)
       }
@@ -359,10 +545,21 @@ export const syncTemplate = (
       }
       const overridden = !existing.isDeleted && data.sig !== undefined && signature(existing) !== data.sig;
       if ((hiddenByUser || overridden || (existing.isDeleted && hidden.has(srcId))) && !reset.has(slide.id)) {
+        if (overridden && data.ph && !!data.empty !== !!freshData.empty) {
+          // a moved placeholder that was typed into (or emptied): only its faded look follows
+          replaced.set(
+            copy.id,
+            newElementWith(existing, {
+              opacity: copy.opacity,
+              customData: { ...(existing.customData || {}), slides: { ...data, empty: freshData.empty } },
+            } as any),
+          );
+        }
         continue; // the user changed it on this slide
       }
       const sameSize = copy.type !== "text" || Math.abs(existing.width - copy.width) < 1;
-      if (!existing.isDeleted && data.sig === sig && sameSize && !reset.has(slide.id)) {
+      const sameState = !!data.empty === !!freshData.empty;
+      if (!existing.isDeleted && data.sig === sig && sameSize && sameState && !reset.has(slide.id)) {
         continue; // up to date
       }
       replaced.set(
@@ -387,9 +584,23 @@ export const syncTemplate = (
         );
       }
     }
+    const slidePatch: Partial<SlideData> = {};
     const nextHidden = [...hidden].filter((id) => templateIds.has(id)).sort();
     if (nextHidden.join() !== [...wasHidden].sort().join()) {
-      replaced.set(slide.id, withSlideData(slide, { hidden: nextHidden.length ? nextHidden : undefined }));
+      slidePatch.hidden = nextHidden.length ? nextHidden : undefined;
+    }
+    // the headline names the slide (while the name is a default one, or the last headline)
+    const name = slide.name?.trim() || "";
+    const autoName = slideData(slide).autoName;
+    let renamed: string | null = null;
+    if (headline && headline !== name && (/^Slide \d+$/.test(name) || !name || name === autoName)) {
+      renamed = headline;
+      slidePatch.autoName = headline;
+    }
+    if (Object.keys(slidePatch).length || renamed) {
+      const base = (replaced.get(slide.id) as Frame | undefined) ?? slide;
+      const patched = withSlideData(base, slidePatch);
+      replaced.set(slide.id, renamed ? newElementWith(patched, { name: renamed } as any) : patched);
     }
   });
 
@@ -452,10 +663,11 @@ const liftCopiesAboveBackgrounds = (elements: ExcalidrawElement[], slides: Frame
 
 /** what decides whether the template sync has anything to do */
 export const templateKey = (elements: readonly ExcalidrawElement[], deck: string) => {
-  const template = getTemplate(elements);
+  const templates = getTemplates(elements);
   const slides = getSlides(elements);
-  const parts: unknown[] = [deck, template?.id, template?.x, template?.y, template?.width, template?.height];
-  if (template) {
+  const parts: unknown[] = [deck];
+  for (const template of templates) {
+    parts.push(template.id, template.x, template.y, template.width, template.height, template.version);
     for (const el of elements) {
       if (el.frameId === template.id) {
         parts.push(el.id, el.version, el.isDeleted);
@@ -463,10 +675,17 @@ export const templateKey = (elements: readonly ExcalidrawElement[], deck: string
     }
   }
   for (const slide of slides) {
-    parts.push(slide.id, slide.x, slide.y, slide.width, slide.height, slide.name, slideData(slide).template, slideData(slide).hidden);
+    const data = slideData(slide);
+    parts.push(slide.id, slide.x, slide.y, slide.width, slide.height, slide.name, data.template, data.hidden, data.layout, data.rev);
   }
   // copies the user deleted or edited don't need a sync; missing ones do
   parts.push(elements.filter((el) => slideData(el).copyOf && !el.isDeleted).length);
+  // typing into a placeholder: it stops being faded
+  for (const el of elements) {
+    if (slideData(el).ph) {
+      parts.push(el.id, el.version);
+    }
+  }
   return hashString(JSON.stringify(parts));
 };
 
@@ -748,7 +967,9 @@ export const addSlide = (api: ExcalidrawImperativeAPI, after?: string) => {
   const [, minY, maxX] = drawn.length ? getCommonBounds(drawn) : [0, 0, -SLIDE_GAP * 2];
   const start = origin(slides) ?? { x: Math.round(maxX + SLIDE_GAP * 2), y: Math.round(minY) };
   const position = anchor ? slides.indexOf(anchor) + 1 : 0;
-  const frame = withSlideData(newFrame({ ...start, width, height, name: `Slide ${slides.length + 1}` }), {});
+  // the same template as the slide it follows
+  const layout = anchor ? slideData(anchor).layout : undefined;
+  const frame = withSlideData(newFrame({ ...start, width, height, name: `Slide ${slides.length + 1}` }), { layout });
   const ordered = [...slides.slice(0, position).map((s) => s.id), frame.id, ...slides.slice(position).map((s) => s.id)];
   const next = layOut(withOrder([...elements, frame], ordered), start);
   syncInvalidIndices(next as any);
@@ -767,7 +988,7 @@ export const createTemplate = (api: ExcalidrawImperativeAPI, theme: DeckTheme = 
   const height = slides[0]?.height ?? SLIDE_HEIGHT;
   const minX = slides.length ? Math.min(...slides.map((s) => s.x)) : 0;
   const minY = slides.length ? Math.min(...slides.map((s) => s.y)) : 0;
-  const frame = withSlideData(newFrame({ x: minX, y: minY - height - SLIDE_GAP * 2, width, height, name: "Template" }), {
+  const frame = withSlideData(newFrame({ x: minX, y: minY - height - SLIDE_GAP * 2, width, height, name: "Content" }), {
     role: "template",
     theme,
   });
@@ -809,12 +1030,35 @@ export const createTemplate = (api: ExcalidrawImperativeAPI, theme: DeckTheme = 
     startArrowhead: null,
     endArrowhead: null,
   } as any;
+  // sample content: typed on each slide (placeholders), like in presentation software
+  const sample = (id: string, y: number, value: string, fontSize: number, placeholder: "title" | "text") =>
+    withSlideData(
+      {
+        ...text(id, frame.x + 120, value, "left"),
+        y: frame.y + y,
+        fontSize,
+        strokeColor: theme.textColor,
+      },
+      { placeholder },
+    );
   const footer = [
     line,
     text(`${frame.id}-deck`, frame.x + 60, "{deck}", "left"),
     text(`${frame.id}-page`, frame.x + width - 360, "{page} / {total}", "right"),
+    sample(`${frame.id}-title`, 110, "Lorem ipsum dolor sit amet", theme.titleSize, "title"),
+    sample(
+      `${frame.id}-body`,
+      110 + theme.titleSize * 1.25 + 70,
+      "• Lorem ipsum dolor sit amet, consectetur adipiscing elit\n• Sed do eiusmod tempor incididunt ut labore\n• Ut enim ad minim veniam, quis nostrud exercitation",
+      theme.bodySize,
+      "text",
+    ),
   ];
-  const next = [...restoreElements(footer, null, { refreshDimensions: true }), ...elements, frame];
+  // texts measured for their font and size (restoring alone keeps the placeholder 300 × 30)
+  const measured = restoreElements(footer, null, { refreshDimensions: true }).map((el: any) =>
+    el.type === "text" ? { ...el, ...(refreshTextDimensions(el, null, new Map() as any, el.originalText ?? el.text) || {}) } : el,
+  );
+  const next = [...measured, ...elements, frame];
   // right-aligned page number: anchor its right edge
   const page: any = next.find((el) => el.id === `${frame.id}-page`);
   if (page) {
@@ -824,6 +1068,86 @@ export const createTemplate = (api: ExcalidrawImperativeAPI, theme: DeckTheme = 
   update(api, next);
   return frame.id as string;
 };
+
+/** another template: a copy of `fromId` (its content, without its versions), right of the last template */
+export const addTemplate = (api: ExcalidrawImperativeAPI, fromId: string, name: string) => {
+  const elements = api.getSceneElementsIncludingDeleted();
+  const templates = getTemplates(elements);
+  const from = templates.find((t) => t.id === fromId);
+  if (!from) {
+    return null;
+  }
+  const own = elements.filter((el) => !el.isDeleted && el.frameId === from.id);
+  const { duplicatedElements, origIdToDuplicateId } = duplicateElements({
+    type: "everything",
+    elements: [from, ...own],
+    randomizeSeed: true,
+  });
+  const right = Math.max(...templates.map((t) => t.x + t.width));
+  const [dx, dy] = [right + SLIDE_GAP - from.x, 0];
+  const frameId = origIdToDuplicateId.get(from.id)!;
+  const order = Math.max(...templates.map((t) => slideData(t).order ?? 0)) + 1;
+  const copies = duplicatedElements.map((el) => {
+    const moved = newElementWith(el as any, { x: el.x + dx, y: el.y + dy } as any) as ExcalidrawElement;
+    if (el.id !== frameId) {
+      return moved;
+    }
+    // a template of its own: no theme (the deck's stays on the first), no versions yet
+    const { role, placeholder } = slideData(el);
+    return newElementWith({ ...moved, customData: { ...(moved.customData || {}), slides: { role, order, placeholder } } } as any, {
+      name,
+    } as any) as ExcalidrawElement;
+  });
+  const next = [...elements, ...copies];
+  syncInvalidIndices(next as any);
+  update(api, next);
+  return frameId as string;
+};
+
+/** delete a template; its slides go to the first template (the deck's theme moves along if needed) */
+export const deleteTemplate = (api: ExcalidrawImperativeAPI, id: string) => {
+  const elements = api.getSceneElementsIncludingDeleted();
+  const templates = getTemplates(elements);
+  const gone = templates.find((t) => t.id === id);
+  if (!gone) {
+    return;
+  }
+  const heir = templates.find((t) => t.id !== id);
+  const theme = slideData(templates[0]).theme;
+  update(
+    api,
+    elements.map((el) => {
+      if (!el.isDeleted && (el.id === id || el.frameId === id)) {
+        return newElementWith(el as any, { isDeleted: true } as any);
+      }
+      if (el.type === "frame" && slideData(el).layout === id) {
+        return withSlideData(el, { layout: undefined, rev: undefined });
+      }
+      if (heir && el.id === heir.id && templates[0].id === id) {
+        return withSlideData(el, { theme, order: 0 });
+      }
+      return el;
+    }),
+  );
+};
+
+/** which template these slides use ("none": no template) */
+export const setSlideTemplate = (api: ExcalidrawImperativeAPI, ids: string[], templateId: string | "none") =>
+  patchSlideData(
+    api,
+    new Map(
+      ids.map((id) => [
+        id,
+        templateId === "none"
+          ? { template: false, layout: undefined, rev: undefined }
+          : { template: undefined, layout: templateId === getTemplate(api.getSceneElements())?.id ? undefined : templateId, rev: undefined },
+      ]),
+    ),
+  );
+
+/** a text on a template: the same on every slide, or typed on each slide (a placeholder) */
+export const setPlaceholder = (api: ExcalidrawImperativeAPI, ids: string[], kind: "title" | "text" | null) =>
+  patchSlideData(api, new Map(ids.map((id) => [id, { placeholder: kind ?? undefined }])));
 
 // -----------------------------------------------------------------------------
 // pictures of slides (thumbnails, presenter view, PDF)
@@ -836,7 +1160,7 @@ export const renderSlide = async (
   { width, background }: { width: number; background: string },
 ) =>
   exportToCanvas({
-    elements: elements.filter((el) => !el.isDeleted) as any,
+    elements: forAudience(elements.filter((el) => !el.isDeleted)) as any,
     appState: { exportBackground: true, viewBackgroundColor: background },
     files,
     exportingFrame: frame,

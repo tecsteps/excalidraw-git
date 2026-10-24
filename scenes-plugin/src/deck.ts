@@ -7,9 +7,13 @@ import { CaptureUpdateAction, hashString } from "@excalidraw/excalidraw";
 import { scenesController } from "./controller";
 import {
   DEFAULT_THEME,
+  applyTemplateChanges,
   getSlides,
   getTemplate,
+  getTemplates,
   getTheme,
+  pendingTemplates,
+  templateOf,
   renderSlide,
   slideData,
   slideVersion,
@@ -32,11 +36,16 @@ export type SlideInfo = {
   steps: number;
   frame: Frame;
   version: number;
+  /** the template it uses (null: none) */
+  layout: string | null;
 };
+
+export type TemplateInfo = { id: string; name: string; slides: number };
 
 export type DeckState = {
   slides: SlideInfo[];
   templateId: string | null;
+  templates: TemplateInfo[];
   theme: DeckTheme;
   /** slide id -> picture (data URL) */
   thumbs: Record<string, string>;
@@ -63,7 +72,7 @@ class Deck {
   /** paused while presenting (nothing is edited then) */
   paused = false;
 
-  state: DeckState = { slides: [], templateId: null, theme: DEFAULT_THEME, thumbs: {}, selection: [], activeId: null };
+  state: DeckState = { slides: [], templateId: null, templates: [], theme: DEFAULT_THEME, thumbs: {}, selection: [], activeId: null };
   private lastSelection = "";
 
   subscribe = (listener: () => void) => {
@@ -150,7 +159,9 @@ class Deck {
 
   private rebuild(elements: readonly ExcalidrawElement[]) {
     const slides = getSlides(elements);
-    const template = getTemplate(elements);
+    const templates = getTemplates(elements);
+    const template = templates[0] ?? null;
+    const layouts = slides.map((slide) => templateOf(slide, templates)?.id ?? null);
     const steps = new Map<string, number>();
     for (const el of elements) {
       const step = slideData(el).step;
@@ -172,9 +183,15 @@ class Deck {
           steps: steps.get(frame.id) ?? 0,
           frame,
           version: frame.version,
+          layout: layouts[index],
         };
       }),
       templateId: template?.id ?? null,
+      templates: templates.map((t, i) => ({
+        id: t.id,
+        name: t.name?.trim() || `Template ${i + 1}`,
+        slides: layouts.filter((id) => id === t.id).length,
+      })),
       theme,
     });
     // the deck's style is the default for new elements (once per scene + theme)
@@ -249,10 +266,7 @@ class Deck {
     const files = api.getFiles();
     const background = api.getAppState().viewBackgroundColor;
     const frames: Frame[] = [...this.state.slides.map((s) => s.frame)];
-    const template = getTemplate(elements);
-    if (template) {
-      frames.push(template);
-    }
+    frames.push(...getTemplates(elements));
     let thumbs = this.state.thumbs;
     for (const frame of frames) {
       const version = slideVersion(elements, frame);
@@ -270,6 +284,24 @@ class Deck {
     if (thumbs !== this.state.thumbs) {
       this.set({ thumbs });
     }
+  }
+
+  /** templates changed on the canvas whose changes the slides don't show yet */
+  pendingTemplates() {
+    return this.api ? pendingTemplates(this.api.getSceneElementsIncludingDeleted()) : [];
+  }
+
+  /** a template's changes: to all its slides, or only to new ones (undoable) */
+  applyTemplate(id: string, { all }: { all: boolean }) {
+    const api = this.api;
+    if (!api) {
+      return;
+    }
+    api.updateScene({
+      elements: applyTemplateChanges(api.getSceneElementsIncludingDeleted(), id, { all }),
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    this.runTemplateSync();
   }
 
   /** the slide picture right now (presenter view: current / next slide) */
