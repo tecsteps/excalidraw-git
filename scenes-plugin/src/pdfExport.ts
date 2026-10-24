@@ -54,6 +54,80 @@ export const pickSlides = (
   return picked;
 };
 
+/** pictures are kept at this many pixels per pixel of the slide (a slide page prints at 144 dpi: 2 → 288 dpi) */
+const IMAGE_DENSITY = 2;
+
+const loadImage = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("picture could not be read"));
+    image.src = src;
+  });
+
+const hasTransparency = (data: Uint8ClampedArray) => {
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] < 255) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Smaller pictures for a PDF, without visible loss: each one scaled down to
+ * twice the size it has on its slides (if it is bigger), and stored as a
+ * high-quality JPEG when it has no transparency. A picture keeps its
+ * original data when that is smaller anyway (or isn't a bitmap).
+ */
+export const optimizeImages = async (
+  elements: readonly ExcalidrawElement[],
+  files: BinaryFiles,
+  frames: readonly Frame[],
+): Promise<BinaryFiles> => {
+  const onSlides = new Set(frames.map((frame) => frame.id));
+  // where each picture is shown: element width, and the part of the picture it shows (crop)
+  // (the crop counts in pixels of the picture as it was when cropped: its naturalWidth)
+  const shown = new Map<string, Array<{ width: number; cropShare: number }>>();
+  for (const el of elements) {
+    if (el.isDeleted || el.type !== "image" || !el.fileId || !el.frameId || !onSlides.has(el.frameId)) {
+      continue;
+    }
+    const crop = (el as any).crop as { width: number; naturalWidth: number } | null;
+    const cropShare = crop ? crop.width / crop.naturalWidth : 1;
+    shown.set(el.fileId, [...(shown.get(el.fileId) ?? []), { width: el.width, cropShare }]);
+  }
+  const result: BinaryFiles = { ...files };
+  for (const [fileId, uses] of shown) {
+    const file = files[fileId];
+    if (!file?.dataURL || !/^data:image\/(png|jpeg|webp|bmp)/.test(file.dataURL)) {
+      continue; // SVG and the like: already small and sharp
+    }
+    try {
+      const image = await loadImage(file.dataURL);
+      // slide pixels per pixel of the picture, at its largest use
+      const perPixel = Math.max(...uses.map((use) => use.width / (use.cropShare * image.naturalWidth)));
+      const factor = Math.min(1, perPixel * IMAGE_DENSITY);
+      const width = Math.max(1, Math.round(image.naturalWidth * factor));
+      const height = Math.max(1, Math.round(image.naturalHeight * factor));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d")!;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(image, 0, 0, width, height);
+      const opaque = !hasTransparency(context.getImageData(0, 0, width, height).data);
+      const dataURL = opaque ? canvas.toDataURL("image/jpeg", 0.92) : canvas.toDataURL("image/png");
+      if (dataURL.length < file.dataURL.length * 0.9) {
+        result[fileId] = { ...file, dataURL: dataURL as any, mimeType: (opaque ? "image/jpeg" : "image/png") as any };
+      }
+    } catch {
+      // a picture that can't be read stays as it is
+    }
+  }
+  return result;
+};
+
 /** one self-contained HTML page with a page per slide, ready to print */
 export const slidesHtml = async (
   input: readonly ExcalidrawElement[],
@@ -140,7 +214,7 @@ export const printToPdf = async (html: string) => {
 };
 
 /** without the server: the browser's own print dialog (Save as PDF) */
-export const printInBrowser = (html: string) => {
+export const printInBrowser = (html: string, fileName?: string) => {
   const frame = document.createElement("iframe");
   frame.style.cssText = "position:fixed;width:0;height:0;border:0;visibility:hidden";
   document.body.appendChild(frame);
@@ -149,8 +223,14 @@ export const printInBrowser = (html: string) => {
   doc.write(html);
   doc.close();
   const print = () => {
+    // "Save as PDF" names the file after the page's title, not the printed frame's
+    const title = document.title;
+    if (fileName) {
+      document.title = fileName;
+    }
     frame.contentWindow!.focus();
-    frame.contentWindow!.print();
+    frame.contentWindow!.print(); // blocks until the dialog is closed
+    document.title = title;
     setTimeout(() => frame.remove(), 60_000);
   };
   doc.fonts.ready.then(() => setTimeout(print, 300));

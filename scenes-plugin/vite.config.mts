@@ -731,6 +731,8 @@ const kurviqBuild = () => {
 const kurviqPwa = () =>
   VitePWA({
     registerType: "autoUpdate",
+    // icons the page itself uses (tab, header): there offline too
+    includeAssets: ["kurviq.svg", "favicon.ico", "favicon-16x16.png", "favicon-32x32.png", "apple-touch-icon.png"],
     workbox: {
       navigateFallbackDenylist: [/^\/auth\//, /^\/oauth\//, /^\/\.well-known\//, /^\/mcp(\/|$)/, /^\/live\//, /^\/llms\.txt$/, /^\/(imprint|privacy)(\.html)?$/, /\.txt$/],
       globIgnores: ["fonts.css", "**/locales/**", "service-worker.js", "**/*.chunk-*.js", "**/CodeMirrorEditor-*.js"],

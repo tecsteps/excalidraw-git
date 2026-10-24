@@ -8,7 +8,7 @@ import clsx from "clsx";
 import { scenesController } from "./controller";
 import { deck } from "./deck";
 import { customFonts } from "./fonts";
-import { pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
+import { optimizeImages, pickSlides, printInBrowser, printToPdf, slidesHtml } from "./pdfExport";
 import { IS_ONLINE } from "./api";
 import { PresentationLink } from "./online/ui";
 import { presenter } from "./present";
@@ -99,15 +99,21 @@ const resetSlides = (ids: string[]) => {
 
 type PdfChoice = "all" | "current" | "pick";
 
-const exportPdf = async (spec: string, { includeSkipped }: { includeSkipped: boolean }, setBusy: (busy: string | null) => void) => {
+const exportPdf = async (
+  spec: string,
+  { includeSkipped, compress }: { includeSkipped: boolean; compress: boolean },
+  setBusy: (busy: string | null) => void,
+) => {
   const elements = api().getSceneElementsIncludingDeleted();
   const name = scenesController.getState().current ?? "Untitled";
   const frames = pickSlides(elements, spec, { includeSkipped });
   setBusy(`Preparing ${frames.length} slide${frames.length === 1 ? "" : "s"}…`);
-  const html = await slidesHtml(elements, api().getFiles(), frames, {
+  const files = compress ? await optimizeImages(elements, api().getFiles(), frames) : api().getFiles();
+  const html = await slidesHtml(elements, files, frames, {
     deck: name,
     background: api().getAppState().viewBackgroundColor,
   });
+  const suffix = spec === "all" ? "" : frames.length === 1 ? ` - slide ${deck.getState().slides.findIndex((s) => s.id === frames[0].id) + 1}` : ` - slides ${spec.replace(/\s+/g, "")}`;
   let blob: Blob;
   try {
     setBusy("Printing PDF…");
@@ -116,12 +122,11 @@ const exportPdf = async (spec: string, { includeSkipped }: { includeSkipped: boo
     // scenes server without PDF support (or no Chrome): the browser prints it
     console.warn("PDF via scenes server failed, using the print dialog", error);
     setBusy(null);
-    printInBrowser(html);
+    printInBrowser(html, `${name}${suffix}`);
     return;
   }
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  const suffix = spec === "all" ? "" : frames.length === 1 ? ` - slide ${deck.getState().slides.findIndex((s) => s.id === frames[0].id) + 1}` : ` - slides ${spec.replace(/\s+/g, "")}`;
   link.download = `${name}${suffix}.pdf`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
@@ -135,6 +140,7 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
   const [choice, setChoice] = useState<PdfChoice>(current ? "current" : "all");
   const [pick, setPick] = useState("");
   const [includeSkipped, setIncludeSkipped] = useState(false);
+  const [compress, setCompress] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shown = slides.filter((s) => includeSkipped || !s.skip).length;
@@ -167,6 +173,10 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
           Include skipped slides
         </label>
       )}
+      <label className="slides-check" title="Pictures at twice their size on the slide, JPEG where they have no transparency">
+        <input type="checkbox" checked={compress} onChange={(event) => setCompress(event.target.checked)} />
+        Smaller file (no visible loss)
+      </label>
       <div className="slides-row">
         <button
           type="button"
@@ -174,7 +184,7 @@ const PdfPanel = ({ onClose }: { onClose: () => void }) => {
           disabled={!!busy || (choice === "pick" && !pick.trim())}
           onClick={() => {
             setError(null);
-            exportPdf(spec, { includeSkipped }, setBusy)
+            exportPdf(spec, { includeSkipped, compress }, setBusy)
               .then(onClose)
               .catch((err) => {
                 setBusy(null);
@@ -609,18 +619,6 @@ export const SlidesSidebar = () => {
         ) : (
           <>
             <div className="slides-row">
-              <button
-                type="button"
-                className="slides-btn slides-btn--primary"
-                disabled={!slides.some((s) => !s.skip)}
-                onClick={() => presenter.start(active ?? undefined)}
-                title="Present (Esc ends)"
-              >
-                <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden>
-                  <path d="M5 3.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8A.8.8 0 0 0 5 3.2z" fill="currentColor" />
-                </svg>
-                Present
-              </button>
               {IS_ONLINE && <PresentationLink />}
               <button
                 type="button"

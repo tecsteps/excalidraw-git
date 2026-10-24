@@ -379,7 +379,8 @@
     letter-spacing: normal;
     cursor: pointer;
 
-    &:disabled {
+    &:disabled,
+    &[aria-disabled="true"] {
       opacity: 0.5;
       cursor: default;
     }

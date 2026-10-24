@@ -9,6 +9,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 
 import { scenesController } from "../controller";
+import { QuickTip } from "../quickTip";
 
 import { SPACE_KEY, currentSpace, spaceSuffix } from "../storage";
 
@@ -563,41 +564,70 @@ const SpaceSwitcher = () => {
 const shareLink = (owner: string, name: string, { present = false } = {}) =>
   `${window.location.origin}/@${encodeURIComponent(owner)}/${encodeURIComponent(name)}${present ? "?present" : ""}`;
 
-/** a link button that copies and says so */
+/** a link button that copies and says so; `tip` says who can open the link (null: nothing to share yet) */
 const CopyLink = ({
   link,
   label,
-  title,
+  tip,
   icon,
   className = "scenes-link",
 }: {
-  link: string;
+  link: string | null;
   label: string;
-  title: string;
+  tip: string;
   icon?: ReactNode;
   className?: string;
 }) => {
   const [copied, setCopied] = useState(false);
   return (
-    <button
-      type="button"
-      className={className}
-      title={`${link} — ${title}`}
-      onClick={() =>
-        navigator.clipboard.writeText(link).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        })
-      }
-    >
-      {icon}
-      {copied ? "Copied ✓" : label}
-    </button>
+    <QuickTip tip={tip} label={false}>
+      <button
+        type="button"
+        className={className}
+        // not `disabled`: a disabled button gets no hover, so no tooltip saying why
+        aria-disabled={!link || undefined}
+        onClick={() =>
+          link &&
+          navigator.clipboard.writeText(link).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {icon}
+        {copied ? "Copied ✓" : label}
+      </button>
+    </QuickTip>
   );
 };
 
-const whoCanView = (item: SceneListItem, repo: RepoChoice) =>
-  item.public ? "anyone can view it" : `viewable by everyone who can read ${repo.owner}/${repo.name} on GitHub`;
+/** who can open a scene's link, for its tooltip */
+const shareTip = (item: SceneListItem | undefined, repo: RepoChoice | null, what: string) => {
+  if (!repo) {
+    return `Nothing to share yet: this ${what} is only in this browser. Sign in with GitHub to sync it, then share it.`;
+  }
+  if (!item || item.name === null || item.localOnly) {
+    return `Nothing to share: this ${what} is local only (only in this browser). Turn sync on for it to share it.`;
+  }
+  if (!item.onGitHub) {
+    return `Not on GitHub yet: you can share this ${what} once it has synced.`;
+  }
+  return item.public
+    ? `Copies a link to this ${what}. It is public: anyone with the link can open it, no sign-in needed.`
+    : `Copies a link to this ${what}. It is private: only people who can read ${repo.owner}/${repo.name} on GitHub can open it, after signing in with GitHub. To share with anyone: Manage scenes → Make public.`;
+};
+
+const LINK_ICON = (
+  <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
+    <path
+      d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9m1.3 3.9a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+  </svg>
+);
 
 /** in the Slides sidebar: a link that opens the deck presenting */
 export const PresentationLink = () => {
@@ -605,26 +635,17 @@ export const PresentationLink = () => {
   const { current, list } = useSyncExternalStore(scenesController.subscribe, scenesController.getState);
   const { slides } = useSyncExternalStore(deck.subscribe, deck.getState);
   const item = list.find((entry) => entry.name === current);
-  if (!repo || !item || item.name === null || item.localOnly || !item.onGitHub || !slides.length) {
+  if (!slides.length) {
     return null;
   }
+  const shareable = repo && item && item.name !== null && !item.localOnly && item.onGitHub;
   return (
     <CopyLink
       className="slides-btn"
-      link={shareLink(repo.owner, item.name, { present: true })}
+      link={shareable ? shareLink(repo.owner, item.name!, { present: true }) : null}
       label="Share"
-      icon={
-        <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden>
-          <path
-            d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-.9.9m1.3 3.9a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l.9-.9"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        </svg>
-      }
-      title={`opens presenting; ${whoCanView(item, repo)}`}
+      icon={LINK_ICON}
+      tip={shareTip(item, repo, "presentation")}
     />
   );
 };
@@ -639,12 +660,12 @@ export const SceneSharing = ({ item, disabled }: { item: SceneListItem; disabled
   const name = item.name;
   return (
     <>
-      <CopyLink link={shareLink(repo.owner, name)} label="Copy link" title={whoCanView(item, repo)} />
+      <CopyLink link={item.onGitHub ? shareLink(repo.owner, name) : null} label="Copy link" tip={shareTip(item, repo, "scene")} />
       {slides.length > 0 && (
         <CopyLink
-          link={shareLink(repo.owner, name, { present: true })}
+          link={item.onGitHub ? shareLink(repo.owner, name, { present: true }) : null}
           label="Copy presentation link"
-          title={`opens presenting; ${whoCanView(item, repo)}`}
+          tip={shareTip(item, repo, "presentation")}
         />
       )}
       {!repo.readOnly && (

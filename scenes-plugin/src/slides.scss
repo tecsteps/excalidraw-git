@@ -30,11 +30,12 @@
     font-size: 0.8rem;
     cursor: pointer;
 
-    &:hover:not(:disabled) {
+    &:hover:not(:disabled, [aria-disabled="true"]) {
       background: var(--color-surface-high);
     }
 
-    &:disabled {
+    &:disabled,
+    &[aria-disabled="true"] {
       opacity: 0.5;
       cursor: default;
     }

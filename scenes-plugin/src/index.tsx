@@ -10,8 +10,7 @@ import {
   PlusIcon,
   save,
 } from "@excalidraw/excalidraw/components/icons";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
@@ -21,6 +20,7 @@ import { IS_RENDERER, connectLive } from "./live";
 import { connectRouter } from "./router";
 import { deck } from "./deck";
 import { PresentationOverlay, presenter } from "./present";
+import { QuickTip } from "./quickTip";
 import { loadFontLibrary } from "./fonts";
 import { AddFontOverlay } from "./fontsUI";
 import { PublicSceneOverlay } from "./publicScene";
@@ -177,53 +177,6 @@ const ICON_PATHS = {
       <path d="M2 12h20" />
     </>
   ),
-};
-
-/**
- * A tooltip that shows right away (the browser's own, from `title`, waits
- * about a second and can't be styled); on the page, so lists that scroll
- * don't cut it off
- */
-const QuickTip = ({ tip, className, children }: { tip: string; className?: string; children: ReactNode }) => {
-  const [at, setAt] = useState<{ x: number; y: number; above: boolean } | null>(null);
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  return (
-    <span
-      className={className}
-      aria-label={tip}
-      role="img"
-      onMouseEnter={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        const above = rect.bottom + 48 > window.innerHeight;
-        timer.current = window.setTimeout(
-          () => setAt({ x: rect.left + rect.width / 2, y: above ? rect.top - 8 : rect.bottom + 8, above }),
-          120,
-        );
-      }}
-      onMouseLeave={() => {
-        window.clearTimeout(timer.current);
-        setAt(null);
-      }}
-    >
-      {children}
-      {at &&
-        createPortal(
-          <div
-            className={clsx("kurviq-tip", { "kurviq-tip--above": at.above })}
-            role="tooltip"
-            style={(() => {
-              // kept on screen; the arrow still points at the icon
-              const left = Math.min(Math.max(at.x, 140), window.innerWidth - 140);
-              return { left, top: at.y, "--tip-arrow": `calc(50% + ${at.x - left}px)` } as React.CSSProperties;
-            })()}
-          >
-            {tip}
-          </div>,
-          document.body,
-        )}
-    </span>
-  );
 };
 
 const PlaceIcon = ({ kind, title }: { kind: keyof typeof ICON_PATHS; title: string }) => (
