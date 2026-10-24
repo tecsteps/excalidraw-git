@@ -557,6 +557,26 @@ const TemplateList = () => {
             </button>
           </li>
         ))}
+        <li>
+          <button
+            type="button"
+            className="slides-add"
+            onClick={() => {
+              // a copy of the template being edited (or the first one), to change from there
+              const from = templates.find((t) => t.id === deck.getState().activeId) ?? templates[0];
+              const name = from && window.prompt("Name of the new template (e.g. Title, Section)", "Section")?.trim();
+              const id = name ? addTemplate(api(), from.id, name) : null;
+              if (id) {
+                setTimeout(() => focusFrame(id, false), 50);
+              }
+            }}
+          >
+            <span className="slides-add__plus" aria-hidden="true">
+              +
+            </span>
+            New template
+          </button>
+        </li>
       </ul>
       <p className="slides-hint">
         Texts on a template: <code>{"{page}"}</code> <code>{"{total}"}</code> <code>{"{title}"}</code> <code>{"{deck}"}</code>{" "}
